@@ -19,7 +19,8 @@ export function recordRun(history: History, run: Pipeline) {
 }
 export function receiveFrame(transport: Transport, bytes: number, at: number) {
   transport.received_total++; transport.bytes_total += bytes;
-  transport.frames = [...transport.frames, { at, bytes }].slice(-120);
+  transport.frames.push({ at, bytes });
+  if (transport.frames.length > 120) transport.frames.shift();
 }
 export function pacing(env: { STREAM_FPS?: string; EVAL_INTERVAL_MS?: string; NARRATION_INTERVAL_MS?: string }) {
   const number = (v: string | undefined, fallback: number, min: number, max: number) => v?.trim() && Number.isFinite(Number(v)) && Number(v)>=min && Number(v)<=max ? Number(v) : fallback;

@@ -131,9 +131,42 @@ test('slow viewer is disconnected instead of growing an image backlog', async ()
   const device = await connect('stackchan-02', 'device', 'dev-device-02');
   const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/viewer?room=main&device_id=stackchan-02`, { headers: { Origin: origin } });
   active.add(ws); await once(ws, 'open'); const closed = once(ws, 'close');
-  for (let id = 0; id < 5; id++) await frame(device, id, 'stackchan-02');
+  const jpeg = await syntheticJPEG(0, 'stackchan-02');
+  for (let id = 0; id < 121; id++) { const packet = Buffer.alloc(4 + jpeg.length); packet.writeUInt32BE(id); jpeg.copy(packet, 4); device.ws.send(packet); }
   assert.equal((await closed)[0], 1013);
   device.ws.close(1000);
+});
+
+test('60fps frames reach a viewer byte-for-byte with 250ms delayed ACKs', async () => {
+  const device = await connect('stackchan-02', 'device', 'dev-device-02');
+  const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/viewer?room=main&device_id=stackchan-02`, { headers: { Origin: origin } });
+  active.add(ws); const received = [], sent = [], timers = new Set(); let stream, wasClosed = false;
+  ws.on('close', () => { wasClosed = true; });
+  ws.on('message', (raw, binary) => {
+    if (!binary) { const m = JSON.parse(raw.toString()); if (m.type === 'stream') stream = m.data.stream_id; return; }
+    received.push(Buffer.from(raw)); const frame_id = raw.readUInt32BE(), currentStream = stream;
+    const timer = setTimeout(() => { timers.delete(timer); if (ws.readyState === WebSocket.OPEN) ws.send(env('frame_ack', { stream_id: currentStream, frame_id })); }, 250); timers.add(timer);
+  });
+  await once(ws, 'open');
+  try {
+    const jpeg = await syntheticJPEG(0, 'stackchan-02');
+    for (let id = 0; id < 60; id++) {
+      const packet = Buffer.alloc(4 + jpeg.length); packet.writeUInt32BE(id); jpeg.copy(packet, 4); sent.push(packet); device.ws.send(packet); await sleep(1000/60);
+    }
+    for (let i = 0; i < 150 && received.length < sent.length && !wasClosed; i++) await sleep(20);
+    assert.equal(wasClosed, false); assert.deepEqual(received, sent);
+  } finally { for (const timer of timers) clearTimeout(timer); ws.close(1000); device.ws.close(1000); }
+});
+
+test('an unacknowledged viewer expires even after the device stops sending frames', async () => {
+  const device = await connect('stackchan-02', 'device', 'dev-device-02');
+  const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/viewer?room=main&device_id=stackchan-02`, { headers: { Origin: origin } });
+  active.add(ws); await once(ws, 'open'); const closed = once(ws, 'close');
+  try {
+    await frame(device, 0, 'stackchan-02');
+    const result = await Promise.race([closed, sleep(4000).then(() => null)]);
+    assert.ok(result, 'no further ingress must be needed to expire ACKs'); assert.equal(result[0], 1013);
+  } finally { ws.close(1000); device.ws.close(1000); }
 });
 
 test('missing status/heartbeat expires device and control leases and releases control', async () => {

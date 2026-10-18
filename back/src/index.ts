@@ -1,3 +1,4 @@
+import { FrameWindow } from './frame-window';
 import { monitorHTML, monitorJS } from './monitor';
 import { logConnection, logRun, logTransport } from './observability';
 import { serializeServer, parseClientMessage, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
@@ -15,7 +16,7 @@ interface Env extends ControlledPaidEnv {
 }
 type Config = Record<string, { control_token: string; devices: Record<string, string>; profiles?: Record<string, Personality> }>;
 type Action = ServerData['action']['action'];
-type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; pending: Set<number>; sentAt: Map<number, number>; lastMetricsRequest?: number; monitor?: boolean };
+type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; frames: FrameWindow; lastMetricsRequest?: number; monitor?: boolean };
 type Device = {
   id: string; room: string; mind: Mind; behavior?: Behavior; inbox: Dialogue[]; experienced: Set<string>; greeted: Set<string>; publicHistory: Dialogue[];
   peer?: Peer; stream: string | null; viewers: Set<Peer>; controller?: Peer;
@@ -24,7 +25,7 @@ type Device = {
   retryAt: number; lastDecision: number; lastAI: number; busy: boolean; gestureUntil: number; lastDetection: number; lastGesture: number;
   lastTextAt: number; textRetryAt: number; textEmotion?: Emotion;
   metrics: History; transport: Transport; lastTelemetry: number; lastTransportLog?: number; actionSentAt: Map<number, { sent: number; frame_at?: number }>; human: HumanActionState; lastChoice?: string; affectiveHistory: Experience[]; firstJoinAt: number | null; totalExperiences: number;
-  latest?: { bytes: ArrayBuffer; id: number; order: number; at: number };
+  latest?: { bytes: Uint8Array; id: number; order: number; at: number };
 };
 type Identity = { human?: HumanActionState; version: 1; firstJoinAt: number; updatedAt: number; totalExperiences: number; mind: Mind; emotion: Emotion; affectiveHistory: Experience[]; publicHistory: Dialogue[]; experienced: string[] };
 const ident = /^[a-z0-9][a-z0-9_-]{0,31}$/;
@@ -196,7 +197,11 @@ export class Room {
     }
     return d;
   }
-  private broadcast<K extends keyof ServerData>(d: Device, type: K, data: ServerData[K]) { for (const p of d.viewers) send(p, type, data); }
+  private broadcast<K extends keyof ServerData>(d: Device, type: K, data: ServerData[K]) {
+    if (!d.viewers.size) return;
+    const payload = serializeServer(type, data);
+    for (const p of d.viewers) { try { p.ws.send(payload); } catch { /* close cleans up */ } }
+  }
   async fetch(req: Request): Promise<Response> {
     await this.ready;
     const url = new URL(req.url), room = url.searchParams.get('room')!;
@@ -234,7 +239,7 @@ export class Room {
     const pair = new WebSocketPair(), [client, server] = Object.values(pair);
     server.binaryType = 'arraybuffer';
     server.accept();
-    const p: Peer = { ws: server, role, id, sid, expires: Number(req.headers.get('X-Expires')), seen: Date.now(), pending: new Set(), sentAt: new Map(), monitor: req.headers.get('X-Monitor') === 'true' };
+    const p: Peer = { ws: server, role, id, sid, expires: Number(req.headers.get('X-Expires')), seen: Date.now(), frames: new FrameWindow(), monitor: req.headers.get('X-Monitor') === 'true' };
     if (role === 'device') {
       if (d.peer) close(d.peer, 4001, 'replaced');
       this.cancelConversations(id);
@@ -252,7 +257,7 @@ export class Room {
       d.seq = 0; d.pan = 0; d.tilt = 0; d.order = 0; d.detectedOrder = -1; d.lastDecision = -1; d.gestureUntil = 0; d.lastDetection = 0;
       d.status = { online: true, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' };
       logConnection(d, true);
-      for (const viewer of d.viewers) { viewer.pending.clear(); viewer.sentAt.clear(); }
+      for (const viewer of d.viewers) { viewer.frames.clear(); }
       this.broadcast(d, 'stream', { stream_id: d.stream }); this.broadcast(d, 'device_status', d.status); this.broadcast(d, 'emotion', d.emotion); this.broadcast(d, 'mind', d.mind); this.broadcast(d, 'behavior', null);
     } else {
       if (role === 'controller') { if (d.controller) { d.viewers.delete(d.controller); close(d.controller, 4001, 'replaced'); } d.controller = p; }
@@ -289,15 +294,16 @@ export class Room {
       if (bytes.length < 8 || bytes[4] !== 255 || bytes[5] !== 216 || bytes.at(-2) !== 255 || bytes.at(-1) !== 217) return this.reject(p, 'invalid_frame');
       const id = new DataView(raw).getUint32(0, false);
       if ((d.latest && ((id - d.latest.id) >>> 0) >= 0x80000000) || d.latest?.id === id) return;
-      const frame = { bytes: raw.slice(4), id, order: ++d.order, at: Date.now() };
-      receiveFrame(d.transport, raw.byteLength, Date.now());
+      const frame = { bytes: bytes.subarray(4), id, order: ++d.order, at: Date.now() };
+      const sentAt = performance.now();
+      receiveFrame(d.transport, raw.byteLength, frame.at);
       send(p, 'frame_received', { stream_id: d.stream!, frame_id: id });
       d.latest = frame; d.frames.set(id, { order: frame.order, at: frame.at });
-      for (const [key, value] of d.frames) if (Date.now() - value.at > 3000 || d.frames.size > 16) d.frames.delete(key);
+      for (const [key, value] of d.frames) if (frame.at - value.at > 3000 || d.frames.size > 16) d.frames.delete(key);
       for (const viewer of d.viewers) {
         if (viewer.monitor) continue;
-        if (viewer.pending.size >= 4) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
-        try { viewer.ws.send(raw); viewer.pending.add(id); viewer.sentAt.set(id, performance.now()); } catch { this.cleanup(viewer, d); }
+        if (!viewer.frames.canSend(raw.byteLength, sentAt)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
+        try { viewer.ws.send(raw); viewer.frames.sent(id, raw.byteLength, sentAt); } catch { this.cleanup(viewer, d); }
       }
       return;
     }
@@ -311,9 +317,9 @@ export class Room {
       p.lastMetricsRequest = Date.now(); send(p, 'telemetry_snapshot', this.telemetry(d, true));
     } else if (m.type === 'frame_ack') {
       const a = m.data;
-      if (a.stream_id === d.stream && p.pending.has(a.frame_id)) {
-        const sent = p.sentAt.get(a.frame_id); if (sent !== undefined) addSample(d.transport.viewer_rtt, performance.now() - sent);
-        for (const id of p.pending) { p.pending.delete(id); p.sentAt.delete(id); if (id === a.frame_id) break; }
+      if (a.stream_id === d.stream) {
+        const rtt = p.frames.acknowledge(a.frame_id, performance.now());
+        if (rtt !== undefined) addSample(d.transport.viewer_rtt, rtt);
       }
     } else if (m.type === 'action_ack') {
       const a = m.data;
@@ -350,10 +356,11 @@ export class Room {
     this.broadcast(d, 'behavior', d.behavior);
   }
   private tick() {
-    const now = Date.now();
+    const now = Date.now(), monotonicNow = performance.now();
     for (const d of this.devices.values()) {
       if (now - d.lastTelemetry >= 5000) { const data = this.telemetry(d); this.broadcast(d, 'telemetry', data);  d.lastTelemetry = now; }
       if (d.peer && now - (d.lastTransportLog || 0) >= 5000) { logTransport(d, this.telemetry(d)); d.lastTransportLog = now; }
+      for (const viewer of d.viewers) if (viewer.frames.expired(monotonicNow)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); }
       for (const viewer of d.viewers) if (viewer.monitor && viewer.expires! <= now) { close(viewer, 4003, 'session_expired'); this.cleanup(viewer, d); }
       if (d.peer && now - d.peer.seen >= 15000) { const p = d.peer; close(p, 4000, 'status_timeout'); this.cleanup(p, d); }
       if (d.controller && (d.controller.expires! <= now || now - d.controller.seen >= 15000)) {
@@ -400,7 +407,7 @@ export class Room {
     if (mode === 'mock') {
       evaluation = mockEvaluation(frame.id, before, d.mind.personality, incomingIsNew, d.affectiveHistory);
     } else if (mode === 'decisions') {
-      const bytes = new Uint8Array(frame.bytes); let binary = '';
+      const bytes = frame.bytes; let binary = '';
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
       const first = await this.ask(d, run, 'perception', evaluationPayload(`data:image/jpeg;base64,${btoa(binary)}`, socialContext(d.mind, before, undefined, peers, incoming, started, d.publicHistory.slice(-6)), d.affectiveHistory, incomingIsNew), calls, aiFetch);
       evaluation = parseEvaluation(first);
