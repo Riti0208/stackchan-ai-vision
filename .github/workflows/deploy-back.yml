@@ -1,4 +1,4 @@
-name: Deploy BE
+name: Deploy StackChan
 
 on:
   push:
@@ -26,12 +26,23 @@ jobs:
         with:
           node-version: '22.22.1'
           cache: npm
-          cache-dependency-path: back/package-lock.json
+          cache-dependency-path: |
+            back/package-lock.json
+            front/package-lock.json
       - run: npm ci
+      - name: Install frontend dependencies and self-hosted vision assets
+        run: npm ci
+        working-directory: front
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run test:e2e
       - run: npm run build
+      - name: Install browser for frontend integration check
+        run: npx playwright install --with-deps chromium
+        working-directory: front
+      - name: Verify frontend with isolated mock backend
+        run: npm run test:smoke
+        working-directory: front
       - name: Deploy existing Worker
         run: npm run deploy
         env:
@@ -48,5 +59,19 @@ jobs:
           assert.equal(health.ok, true);
           assert.equal(health.ai_mode, 'mock');
           assert.equal(health.paid_session.active, false);
-          console.log('Production healthy; paid API session inactive.');
+          const base = new URL(url).origin;
+          const page = await fetch(base, { signal: AbortSignal.timeout(15000) });
+          assert.equal(page.status, 200);
+          const html = await page.text();
+          assert.match(html, /StackChan/);
+          const entry = html.match(/src="([^"]+\.js)"/);
+          assert.ok(entry, 'built frontend entry exists');
+          for (const path of [entry[1], '/vision/face-worker.js', '/vision/vision_wasm_internal.wasm', '/models/blaze_face_short_range.tflite']) {
+            const asset = await fetch(new URL(path, base), { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+            assert.equal(asset.status, 200, `production asset ${path}`);
+          }
+          const list = await fetch(`${base}/api/rooms/main/devices`, { signal: AbortSignal.timeout(15000) });
+          assert.equal(list.status, 200);
+          assert.ok(Array.isArray((await list.json()).devices));
+          console.log('Frontend and backend healthy; vision assets available; paid API session inactive.');
           JS

@@ -212,7 +212,7 @@ ROOM_CONFIGの形:
 ```
 
 4. **FEとAPI/WSは同じoriginにする。** ALLOWED_ORIGINはブラウザに表示されるFEの正確なoriginを設定する。
-   FEのビルドができたら、公開用設定に次のassetsを追加し、Workersと一緒に配信できる。
+   公開用設定には次のassetsと`front/`のビルドフックを設定済み。初回は`npm --prefix ../front ci`でFEの依存関係もインストールする。Workersと一緒に配信する。
    WorkerはAPI/WSを処理し、それ以外をassetsへ渡す。これなら同一originのCookie認証を維持できる。
 
 ```json
@@ -230,8 +230,8 @@ ROOM_CONFIGの形:
 2026-10-18に専用Worker `stackchan-ai-vision` を手元のWranglerから初回公開した。
 公開先は `https://stackchan-ai-vision.k-i-wrd-setuna-g.workers.dev`、
 ヘルスチェックは `/health`。既定は `AI_MODE=mock`、実APIセッションは無効。
-FEは準備中のため、現時点の `/` は404。FEのビルドが用意できたら上記のassetsを追加し、
-同じWorkerへデプロイする。`ALLOWED_ORIGIN`はこの公開URLに設定済み。
+フロントは上記のassetsから同じWorkerの `/` へ配信する構成。
+`ALLOWED_ORIGIN`はこの公開URLに設定済み。
 
 CI用にはアカウント所有APIトークンを使い、対象をこのWorkerだけに限定した
 `Individual Workers Editor`を付与する。既存WorkerへのBE・FE更新に使う。
@@ -241,9 +241,10 @@ Workerの新規作成や他プロジェクトの操作は権限の対象に含�
 期限前にCloudflare側で更新し、Actions Secretも差し替える。
 
 `.github/workflows/deploy-back.yml`はmainへのpushで実行する。型チェック、単体テスト、
-モックE2E、公開ビルドが成功したら既存Workerへデプロイし、`/health`と実APIの停止状態を確認する。
+モックE2E、公開ビルド、フロントのブラウザ結合確認が成功したら既存Workerへデプロイし、
+`/health`・フロント画面・顔検出アセットと実APIの停止状態を確認する。
 Actions画面からmainを指定して手動実行も可能。同時デプロイは直列化する。
-FEのビルドはまだ含めていない。Cloudflare上の既存secretをそのまま維持し、
+FEの依存インストールとビルドも同じCIへ統合する。Cloudflare上の既存secretをそのまま維持し、
 OpenAIキーや部屋の認証情報をGitHubへコピーする必要はない。
 
 アカウント固有の設定・secret・デプロイトークンはGit対象外の

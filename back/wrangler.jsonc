@@ -5,5 +5,7 @@
   "compatibility_date": "2026-10-17",
   "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
-  "vars": { "AI_MODE": "mock", "ENABLE_LAB": "false" }
+  "vars": { "AI_MODE": "mock", "ENABLE_LAB": "false" },
+  "assets": { "directory": "../front/dist", "binding": "ASSETS", "run_worker_first": true },
+  "build": { "command": "npm --prefix ../front run build" }
 }

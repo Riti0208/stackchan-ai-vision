@@ -11,3 +11,7 @@
 
 [BEとFWシミュレーターの起動手順](back/README.md)を参照してください。
 `back/`で`npm ci`、`npm run demo`を実行し、http://127.0.0.1:8787 を開きます。
+
+## フロントエンド
+
+[起動・Cloudflare配信手順](front/README.md)。PC向けのライブ映像・顔検出・感情・本音・AI判断画面。
