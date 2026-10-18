@@ -151,7 +151,7 @@ export class Room {
   private lastRuntimeMode = 'not_evaluated';
   private activeAPICalls = new Map<string, ServerData['api_activity']>();
   private pendingAI = new Set<AbortController>();
-  constructor(private ctx: DurableObjectState, private env: Env, private aiFetch: typeof fetch = fetch) {
+  constructor(private ctx: DurableObjectState, private env: Env, private aiFetch: typeof fetch = (input, init) => fetch(input, init)) {
     this.aiFetch = aiFetch;
     this.ready = ctx.blockConcurrencyWhile(async () => {
       [this.identities, this.metricHistory] = await Promise.all([ctx.storage.list<Identity>({ prefix: 'identity:' }), ctx.storage.list<History>({ prefix: 'telemetry:' })]);
