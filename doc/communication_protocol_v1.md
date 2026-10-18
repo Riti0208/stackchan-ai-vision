@@ -282,7 +282,7 @@ FWは通信断でジェスチャーを止め、安全な待機状態へ移る。
 
 FWは接続直後と以後5秒ごとにdevice_statusを送る。未取得値はnull、未計測FPSは0。
 BEは接続直後の暫定値として`online: true, fps: 0, wifi_rssi: null, battery: null, current_action: idle`を配信可。
-BEが15秒間device_statusを受信しなければ接続を閉じる（4000）。
+`device_status`は稼働情報であり、未受信を理由にBEはデバイスWSを閉じない。接続状態はWebSocketの切断イベントで更新し、通信断はFWのPing/Pongと再接続で復旧する。
 本体切断時はBEが同じ形式で`online: false, fps: 0, wifi_rssi: null, battery: null, current_action: idle`を通知する。
 このidleはオフライン表示用であり、実機の停止完了を確認した値ではない。
 

@@ -49,6 +49,16 @@ test('follow moves before slow social requests without FE, shy avert cannot over
  }finally{await h.close();}}
 });
 
+test('device status telemetry gaps do not close an otherwise open device WebSocket',{timeout:20000},async()=>{
+ const h=await harness({mock:true,controlled:true});
+ try{
+  const d=await h.connect();
+  await sleep(15500);
+  assert.equal(d.ws.readyState,1);
+  assert.equal((await(await h.fetch('/api/rooms/main/devices')).json()).devices[0].online,true);
+ }finally{await h.close();}
+});
+
 test('Decisions directions reach FW with only pan inverted, tilt unchanged, without FE',{timeout:16000},async()=>{
  for(const [x,y,pan,tilt] of [['left','center',-.08,0],['right','center',.08,0],['center','upper',0,.06],['center','lower',0,-.06],['left','lower',-.08,-.06]]){
   const h=await harness();h.state.x=x;h.state.y=y;

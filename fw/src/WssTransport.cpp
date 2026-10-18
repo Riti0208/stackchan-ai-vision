@@ -244,8 +244,9 @@ void networkTask(void*) {
       Serial.println("WSS session timeout; closing connection");
       closeSocket();
     }
-    // The existing BE closes device sessions after 15s without device_status.
-    // Stage 3 sends an honest minimal keepalive; measured upload FPS is stage 5.
+    // device_status is telemetry; the backend does not use it as a connection
+    // timeout. WebSocket ping/pong and transport close events detect dead links.
+    // Stage 3 sends an honest minimal status; measured upload FPS is stage 5.
     uint32_t now = millis();
     if (sessionReady.load() && (!statusSent || now - lastStatusAt >= 5000)) {
       timeval tv;
