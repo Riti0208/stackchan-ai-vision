@@ -5,10 +5,12 @@ namespace stackchan_fw {
 namespace {
 uint32_t lastCapture=0;
 // Cap upload attempts at 60 fps. The camera/network/backend may deliver less.
-constexpr uint32_t period=17;
+// Allow each completed camera frame to enter the latest-frame queue. The
+// three-slot PSRAM pool and backend latest-frame queue absorb overload.
+constexpr uint32_t period=1;
 }
 void initVision() {
-  Serial.println("VISION upload profile format=RGB565LE size=160x120 fps_target=60");
+  Serial.println("VISION upload profile format=RGB565LE size=160x120 fps_target=maximum");
 }
 bool frameDue(uint32_t now) {
   if(!wssSessionReady() || now-lastCapture<period) return false;

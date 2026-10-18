@@ -68,6 +68,7 @@ export class RobotConnection {
   private generation = 0;
   private order = 0;
   private displayed = 0;
+  private lastFramePatchAt = 0;
   private decoding = false;
   private detecting = false;
   private detectAt = 0;
@@ -506,14 +507,19 @@ export class RobotConnection {
           data: { stream_id: item.stream, frame_id: item.frame },
         });
         this.displayed = item.key;
-        this.patch({
-          frame: item.frame,
-          width: bitmap.width,
-          height: bitmap.height,
-          lastFrame: Date.now(),
-          faces: [],
-          primary: null,
-        });
+        // The canvas is drawn above for every frame. Updating the external store
+        // at camera FPS rerenders the entire React tree, so publish UI metadata
+        // at 10 Hz while keeping live video and ACKs unthrottled.
+        const displayedAt = Date.now();
+        if (displayedAt - this.lastFramePatchAt >= 100) {
+          this.lastFramePatchAt = displayedAt;
+          this.patch({
+            frame: item.frame,
+            width: bitmap.width,
+            height: bitmap.height,
+            lastFrame: displayedAt,
+          });
+        }
         if (
           this.worker &&
           this.state.vision === "ready" &&

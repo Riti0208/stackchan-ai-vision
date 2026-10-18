@@ -8,7 +8,7 @@ const origin='https://follow-test.invalid';
 const bundle=await build({absWorkingDir:fileURLToPath(new URL('../',import.meta.url)),entryPoints:['src/index.ts'],bundle:true,write:false,format:'esm',platform:'browser'});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(predicate,ms=7000){const end=Date.now()+ms;while(Date.now()<end){const v=predicate();if(v)return v;await sleep(10);}assert.fail('Local follow/manual condition timed out');}
-function raw(id){const b=new Uint8Array(38416),v=new DataView(b.buffer);b.set([83,67,70,87,2,1]);v.setUint16(6,160);v.setUint16(8,120);v.setUint32(10,id);return b;}
+function raw(id){const b=new Uint8Array(16+160*120*2),v=new DataView(b.buffer);b.set([83,67,70,87,2,1]);v.setUint16(6,160);v.setUint16(8,120);v.setUint32(10,id);return b;}
 async function harness({mode='follow_person',mock=false,controlled=false,big=false,versions}={}){
  const state={presence:.9,x:'right',y:'upper',confidence:.95,delay:50,socialDelay:0},requests=[],sockets=[];
  const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:bundle.outputFiles[0].text+`

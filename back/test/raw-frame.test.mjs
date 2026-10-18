@@ -8,7 +8,7 @@ export function packet(id = 1, color = 0xf800) {
  for(let i=16;i<bytes.length;i+=2){bytes[i]=color&255;bytes[i+1]=color>>>8;}
  return bytes;
 }
-test('RGB565LE red/green/blue become decodable QQVGA JPEGs with original uint32 IDs',async()=>{
+test('RGB565LE red/green/blue become decodable 160x120 JPEGs with original uint32 IDs',async()=>{
  for(const [id,color,channel] of [[0xffffffff,0xf800,0],[0,0x07e0,1],[1,0x001f,2]]){
   const raw=packet(id,color), parsed=parseRawFrame(raw.buffer);assert.equal(parsed.id,id);assert.equal(parsed.pixels.buffer,raw.buffer);
   const jpeg=encodeRawFrame(parsed);assert.equal(new DataView(jpeg.buffer).getUint32(0),id);
@@ -19,7 +19,7 @@ test('RGB565LE red/green/blue become decodable QQVGA JPEGs with original uint32 
 test('raw v2 rejects bad magic/version/format/dimensions/flags and nonexact lengths',()=>{
  assert.equal(parseRawFrame(new ArrayBuffer(0)),null);
  for(const offset of [0,1,2,3,4,5,6,7,8,9,14,15]){const b=packet();b[offset]^=1;assert.equal(parseRawFrame(b.buffer),null,`offset ${offset}`);}
- for(const length of [8,RAW_PACKET_BYTES-1,RAW_PACKET_BYTES+1,160*120*2,320*240*2+16])assert.equal(parseRawFrame(new ArrayBuffer(length)),null);
+ for(const length of [8,RAW_PACKET_BYTES-1,RAW_PACKET_BYTES+1,96*96*2+16,320*240*2+16])assert.equal(parseRawFrame(new ArrayBuffer(length)),null);
  const jpeg=new Uint8Array([0,0,0,1,255,216,255,217]);assert.equal(parseRawFrame(jpeg.buffer),null);
  assert.throws(()=>encodeRawFrame({id:1,pixels:new Uint8Array(2)}),/invalid_raw_frame/);
 });

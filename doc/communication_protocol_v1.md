@@ -133,7 +133,7 @@ BEの期限・順序判定にはBE受信時刻と内部の受信順を使う。�
 
 | type / 形式 | 送信経路 | 内容 |
 |---|---|---|
-| Binary | FW → BE | SCFW v2 + 160×120 RGB565LE（38416 bytes） |
+| Binary | FW → BE | SCFW v2 + 96×96 RGB565LE（18448 bytes） |
 | Binary | BE → FE | `uint32 BE frame_id` + BE生成JPEG |
 | `device_status` | FW → BE → FE | 稼働情報。onlineの最終判断はBE |
 | `detection` | 制御FE → BE | 対象画像の顔検出 |
@@ -172,31 +172,31 @@ roleは`device | viewer | controller`。制御FEは`controller`受信後に検�
 
 ## 4. 画像・stream・顔検出
 
-FW → BEは認証済みdevice WSのみ。**160×120 RGB565LE raw v2固定**。1 WSメッセージに1画像を格納する。320×240は初期版で受け付けない。
+FW → BEは認証済みdevice WSのみ。**96×96 RGB565LE raw v2固定**。1 WSメッセージに1画像を格納する。転送量とバックエンド変換時間を抑える速度優先設定。
 
 | Offset | Bytes | 内容 |
 |---|---|---|
 | 0 | 4 | ASCII `SCFW` |
 | 4 | 1 | version = 2 |
 | 5 | 1 | pixel format = 1 (RGB565LE) |
-| 6 | 2 | width = 160 (uint16 BE) |
-| 8 | 2 | height = 120 (uint16 BE) |
+| 6 | 2 | width = 96 (uint16 BE) |
+| 8 | 2 | height = 96 (uint16 BE) |
 | 10 | 4 | frame_id (uint32 BE) |
 | 14 | 2 | reserved flags = 0 |
-| 16 | 38400 | RGB565 low byte first、行優先、paddingなし |
+| 16 | 18432 | RGB565 low byte first、行優先、paddingなし |
 
-全長は**38416 bytesちょうど**。不正ヘッダー・短い入力・旧JPEG入力は`invalid_raw_frame` / 1008、超過長は`frame_too_large` / 1009で切断する。未認証はWS接続時に拒否し、変換しない。
+全長は**18448 bytesちょうど**。不正ヘッダー・短い入力・旧JPEG入力は`invalid_raw_frame` / 1008、超過長は`frame_too_large` / 1009で切断する。未認証はWS接続時に拒否し、変換しない。
 FWは次のsessionのversion/format/寸法を検証してから送信する。不一致なら送信せず安全に切断する。JPEG fallbackはない。
 
 ```json
-{"type":"session","timestamp":0,"data":{"protocol_version":2,"role":"device","room":"main","device_id":"stackchan-01","frame_format":"rgb565le-v2","width":160,"height":120}}
+{"type":"session","timestamp":0,"data":{"protocol_version":2,"role":"device","room":"main","device_id":"stackchan-01","frame_format":"rgb565le-v2","width":96,"height":96}}
 ```
 
 BEがRGB565をJPEG quality 60へ変換する。BE → viewerの形式とDecisions入力は従来形式を維持し、rawを渡さない。
 
 ```text
 offset 0..3: frame_id (uint32, big-endian)
-offset 4.. : backend-produced JPEG bytes (160x120)
+offset 4.. : backend-produced JPEG bytes (96x96)
 ```
 
 BEは受信イベント内で正常な新規rawを1枚ずつ同期変換し、受信順にJPEGを配信する。変換待ちrawの置換キューとFE向けfps制限は持たない。
@@ -535,7 +535,7 @@ FEは接続失敗を表示し、再ログインや閲覧接続への切り替え
 ```
 
 閲覧者からのdetectionやFW以外からのBinaryなど、権限外送信は`forbidden`通知後1008で閉じる。
-JSONは最大16 KiB。FW raw入力はヘッダー込み38416 bytesちょうど。超過は1009、不正形式・短い入力は1008。
+JSONは最大16 KiB。FW raw入力はヘッダー込み18448 bytesちょうど。超過は1009、不正形式・短い入力は1008。
 
 | close code | 動作 |
 |---|---|
@@ -649,7 +649,7 @@ convertedはencode完了数、publishedは内部JPEGへ公開した数。dropped
 
 BE公開とv2 FW書き込みは協調する。**BE公開後〜v2 FW書き込みまでは旧FWはofflineになる**。旧JPEGを自動fallbackで動かさない。
 公開後はdevice session v2、raw受信、viewer JPEG、Decisions用JPEG data URLを順に確認する。実API開始は既存の明示開始・期限・回数上限・停止ガードを継続する。
-rawは38416 bytes/枚で、60fpsなら約18.44Mbps/台（WS/TLS/TCP別）。60fpsは設定目標で、実機のfpsや改善を保証しない。
+rawは18448 bytes/枚で、60fps時は約8.86Mbps/台（WS/TLS/TCP別）。FWに意図的なFPS上限はなく、実測値はカメラ・無線・バックエンドの処理能力で決まる。
 再現手順・結果・測定の限界は[raw v2検証記録](raw_camera_transport_v2_validation.md)を参照。
 
 

@@ -1,4 +1,5 @@
 import { JPEGEncoder } from './vendor/jpeg-encoder.js';
+// Keep QQVGA capture dimensions while streaming raw RGB565 frames.
 export const RAW_WIDTH = 160, RAW_HEIGHT = 120;
 export const VIEWER_JPEG_QUALITY = 60;
 export const RAW_HEADER_BYTES = 16, RAW_PACKET_BYTES = RAW_HEADER_BYTES + RAW_WIDTH * RAW_HEIGHT * 2;

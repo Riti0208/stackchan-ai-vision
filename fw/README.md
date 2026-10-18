@@ -7,17 +7,17 @@ actions, moves the neck within small limits, and draws the selected expression.
 
 ## What the firmware does
 
-- Captures the GC0308 camera at QQVGA 160x120 RGB565 and sends the framebuffer
+- Captures the GC0308 camera at 160x120 RGB565 and sends the framebuffer
   without JPEG encoding using the `SCFW` v2 raw-frame packet and 32-bit
   big-endian frame ID.
 - Disables Wi-Fi modem sleep, requests 19.5 dBm transmit power, and keeps three
   PSRAM camera buffers to reduce radio and camera-DMA stalls.
-- Upload FPS depends on capture, the 38,400-byte raw transfer, and Wi-Fi; the
+- Upload FPS depends on capture, the 18,432-byte raw transfer, and Wi-Fi; the
   serial `upload_fps` field reports the measured rate. `capture_fps` and
   `capture_ms` separate camera acquisition from upload time.
 - Keeps only the newest unsent frame. Frames older than one second or from an
-  earlier connection are discarded. The target is capped at 60 fps; actual
-  delivery may be lower when the camera or network cannot keep up.
+  earlier connection are discarded. Firmware has no intentional FPS cap;
+  actual delivery is limited by camera capture, TLS/Wi-Fi, and backend JPEG conversion.
 - Sends `device_status` every five seconds with measured upload FPS, Wi-Fi RSSI,
   and current action. The serial `send_ms` measures the WebSocket write call;
   `ack_ms` measures time from starting that write until the backend confirms
