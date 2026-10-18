@@ -2,6 +2,8 @@
 #include <esp_camera.h>
 #include <esp_heap_caps.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
+#include <atomic>
 #include "secrets.h"
 
 // Stage 2: Wi-Fi connection/recovery. WSS is gated until this stage is verified.
@@ -18,6 +20,96 @@ uint32_t wifiAttemptAt = 0;
 bool wifiWasConnected = false;
 bool wifiConfigured = false;
 uint32_t wifiConnections = 0;
+bool wifiScanActive = false;
+uint32_t wifiScanAt = 0;
+uint8_t wifiRetriesSinceScan = 0;
+std::atomic<int> wifiDisconnectReason{-1};
+
+const char* wifiReasonName(int reason) {
+  switch (reason) {
+    case WIFI_REASON_NO_AP_FOUND: return "ssid_not_found";
+    case WIFI_REASON_AUTH_FAIL: return "authentication_failed";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT: return "handshake_timeout";
+    case WIFI_REASON_BEACON_TIMEOUT: return "beacon_timeout";
+    case WIFI_REASON_ASSOC_FAIL: return "association_failed";
+    case WIFI_REASON_ASSOC_LEAVE: return "local_disconnect";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY: return "security_incompatible";
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD: return "security_below_minimum";
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD: return "signal_below_minimum";
+    default: return "other";
+  }
+}
+
+String comparableSSID(String name) {
+  name.trim();
+  name.toLowerCase();
+  name.replace("\xe2\x80\x99", "'"); // Typographic apostrophe in iPhone names.
+  name.replace("\xe2\x80\x98", "'");
+  name.replace("\xc2\xa0", " "); // Nonbreaking space.
+  return name;
+}
+
+void beginWiFiAttempt() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  wifiAttemptAt = millis();
+  Serial.println("WIFI connecting (2.4GHz), retry interval=10000ms");
+}
+
+void beginWiFiScan() {
+  if (!wifiConfigured || wifiScanActive) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WIFI scan skipped: already connected");
+    return;
+  }
+  // Pause association while scanning; the main loop keeps servicing the camera.
+  WiFi.disconnect(false, false);
+  WiFi.scanDelete();
+  wifiScanAt = millis();
+  wifiRetriesSinceScan = 0;
+  int16_t result = WiFi.scanNetworks(true, true, false, 200);
+  if (result == WIFI_SCAN_FAILED) {
+    Serial.println("WIFI scan start failed; resuming connection");
+    beginWiFiAttempt();
+    return;
+  }
+  wifiScanActive = true;
+  Serial.println("WIFI scan started; network names and credentials are not logged");
+}
+
+void serviceWiFiScan(uint32_t now) {
+  int16_t count = WiFi.scanComplete();
+  if (count == WIFI_SCAN_RUNNING && now - wifiScanAt < 15000) return;
+  if (count == WIFI_SCAN_RUNNING) {
+    esp_wifi_scan_stop();
+    Serial.println("WIFI scan timed out; resuming connection");
+  } else if (count < 0) {
+    Serial.println("WIFI scan failed; resuming connection");
+  } else {
+    int best = -1;
+    bool similar = false;
+    String target = comparableSSID(String(WIFI_SSID));
+    for (int i = 0; i < count; ++i) {
+      String name = WiFi.SSID(i);
+      if (name == WIFI_SSID) {
+        if (best < 0 || WiFi.RSSI(i) > WiFi.RSSI(best)) best = i;
+      } else if (comparableSSID(name) == target) {
+        similar = true;
+      }
+    }
+    Serial.printf("WIFI scan visible=%d target=%s similar_name=%s\n", count,
+                  best >= 0 ? "found" : "not_found", similar ? "yes" : "no");
+    if (best >= 0) {
+      Serial.printf("WIFI target rssi=%d channel=%d auth=%d\n",
+                    WiFi.RSSI(best), WiFi.channel(best),
+                    static_cast<int>(WiFi.encryptionType(best)));
+    } else {
+      Serial.println("WIFI CHECK: exact iPhone name / hotspot enabled / compatibility enabled");
+    }
+  }
+  WiFi.scanDelete();
+  wifiScanActive = false;
+  beginWiFiAttempt();
+}
 
 void startWiFi() {
   wifiConfigured = WIFI_SSID[0] != '\0';
@@ -26,6 +118,10 @@ void startWiFi() {
     return;
   }
   WiFi.persistent(false); // Keep credentials out of Wi-Fi NVS storage.
+  // The event callback runs on another task; only touch an atomic here.
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    wifiDisconnectReason.store(info.wifi_sta_disconnected.reason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFi.setHostname("stackchan");
   if (!WiFi.mode(WIFI_STA)) {
     Serial.println("WIFI STA initialization failed; reboot to retry");
@@ -35,16 +131,23 @@ void startWiFi() {
   // One retry scheduler, rather than overlapping automatic connection attempts.
   WiFi.setAutoReconnect(false);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  wifiAttemptAt = millis();
-  Serial.println("WIFI connecting (2.4GHz), retry interval=10000ms");
+  beginWiFiScan();
 }
 
 void serviceWiFi(uint32_t now) {
   if (!wifiConfigured) return;
+  int reason = wifiDisconnectReason.exchange(-1);
+  if (reason >= 0) {
+    Serial.printf("WIFI reason=%d (%s)\n", reason, wifiReasonName(reason));
+  }
+  if (wifiScanActive) {
+    serviceWiFiScan(now);
+    return;
+  }
   bool connected = WiFi.status() == WL_CONNECTED;
   if (connected && !wifiWasConnected) {
     ++wifiConnections;
+    wifiRetriesSinceScan = 0;
     Serial.printf("WIFI connected ip=%s rssi=%d connections=%u\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI(), wifiConnections);
   } else if (!connected && wifiWasConnected) {
@@ -56,8 +159,12 @@ void serviceWiFi(uint32_t now) {
   if (!connected && now - wifiAttemptAt >= WIFI_RETRY_MS) {
     wifiAttemptAt = now;
     Serial.printf("WIFI retry status=%d\n", static_cast<int>(WiFi.status()));
+    if (++wifiRetriesSinceScan >= 3) {
+      beginWiFiScan();
+      return;
+    }
     WiFi.disconnect(false, false);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    beginWiFiAttempt();
   }
 }
 
@@ -96,7 +203,7 @@ void setup() {
   M5StackChan.begin();
   Serial.begin(115200);
   delay(1000);
-  Serial.println("STAGE 2: QVGA RGB565 + Wi-Fi recovery / L R U D C");
+  Serial.println("STAGE 2 DIAG: QVGA RGB565 + Wi-Fi recovery / L R U D C / W=scan");
   if (!psramFound()) {
     Serial.println("FATAL: PSRAM unavailable");
     while (true) delay(1000);
@@ -119,6 +226,7 @@ void loop() {
       case 'U': moveHead(pan, TILT_LIMIT); break;
       case 'D': moveHead(pan, -TILT_LIMIT); break;
       case 'C': moveHead(0, 0); break;
+      case 'W': beginWiFiScan(); break;
     }
   }
   if (cameraReady) {

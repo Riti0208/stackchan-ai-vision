@@ -69,3 +69,31 @@ pass. Stage 2 compile passed (ESP32 core 3.3.12, flash 1,149,007 bytes, static R
 59,804 bytes); device Wi-Fi/reconnect verification is pending. Stage 1 was
 confirmed on hardware by the operator. No WSS/JPEG/status/action claims are made
 for the current stage-2 binary.
+
+## Stage 2 connection diagnostics
+
+If the serial monitor repeats `status=1` (`WL_NO_SSID_AVAIL`), the configured
+SSID was not found; `status=6` means disconnected. Neither alone identifies the
+cause. The diagnostic firmware scans asynchronously at boot and after every
+three failed 10-second retries. Scanning temporarily pauses connection attempts,
+while camera preview and neck controls continue. Results are deleted after use;
+a scan is bounded to 15 seconds. `W` requests a scan while offline; it does not
+disconnect a working connection.
+
+- `WIFI scan visible=N target=found`: exact configured SSID is visible on 2.4GHz.
+  RSSI, channel and the ESP32 authentication enum are reported on the next line.
+- `target=not_found similar_name=yes`: a name differs in ASCII case, outer spaces,
+  typographic apostrophes or nonbreaking spaces. Match the iPhone name exactly.
+  Normalization is for diagnostics only; connection always uses the original SSID.
+- `target=not_found similar_name=no`: check hotspot visibility, exact SSID and
+  iPhone compatibility mode. Visible=0 means this scan found no networks.
+- `WIFI reason=201 (ssid_not_found)`: no configured AP found.
+- `reason=202 (authentication_failed)` / `204 (handshake_timeout)`: authentication
+  or handshake failed; check password and security settings, rather than assuming
+  either code proves a wrong password.
+
+Event callbacks update only an atomic reason code; the main loop logs it.
+SSID names, BSSIDs and passwords are not printed. After flashing, keep the iPhone
+hotspot settings screen open and capture `WIFI scan`, `WIFI target`, `WIFI reason`
+and `WIFI connected` lines. Connection and hotspot off/on recovery still need
+hardware verification before stage 3.
