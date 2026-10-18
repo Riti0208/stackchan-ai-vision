@@ -45,7 +45,7 @@ before(async () => {
   const cfg = JSON.parse(await readFile('wrangler.local.jsonc', 'utf8'));
   delete cfg.$schema; cfg.name = 'stackchan-luna-e2e'; cfg.main = resolve('test/fixtures/luna-worker.ts'); cfg.assets.directory = resolve('lab'); cfg.vars.AI_MODE = 'decisions';
   // Generation-count assertions require evaluations outside the 2s narration cooldown.
-  cfg.vars.EVAL_INTERVAL_MS = '2000';
+  cfg.vars.EVAL_INTERVAL_MS = '2000'; cfg.vars.BEHAVIOR_MODE = 'autonomous';
   const rooms = Object.fromEntries(['main', 'invalid', 'rate', 'timeout', 'slow', 'stale', 'self_stale', 'no_person', 'feelings', 'bad_emotion', 'sad_face', 'identity', 'random_identity', 'human_actions', 'low_intent'].map(room => [room, { profiles: room === 'random_identity' ? {} : { 'stackchan-01': 'curious', 'stackchan-02': 'shy' }, control_token: 'test-control', devices: { 'stackchan-01': 'token-stackchan-01', 'stackchan-02': 'token-stackchan-02' } }]));
   const prepared = await prepareOpenAIConfig({ ROOM_CONFIG: JSON.stringify(rooms), SESSION_SECRET: 'test-only-signing-secret', ALLOWED_ORIGIN: origin, OPENAI_API_KEY: 'fixture-not-a-real-key' }, { seconds: 600, maxCalls: 1000 });
   fixture = prepared.path.slice(0, prepared.path.lastIndexOf('/'));

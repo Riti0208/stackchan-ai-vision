@@ -49,7 +49,7 @@ async function exercise(legacyReceiver) {
     modules: true, script: bundled.outputFiles[0].text, compatibilityDate: '2026-10-17',
     log: new Log(LogLevel.NONE), durableObjects: { ROOMS: { className: 'Room', useSQLite: true } },
     bindings: {
-      AI_MODE: 'decisions', OPENAI_API_KEY: 'fake-runtime-test-key', SESSION_SECRET: 'fake-runtime-test-signing', ALLOWED_ORIGIN: origin,
+      BEHAVIOR_MODE: 'autonomous', AI_MODE: 'decisions', OPENAI_API_KEY: 'fake-runtime-test-key', SESSION_SECRET: 'fake-runtime-test-signing', ALLOWED_ORIGIN: origin,
       ROOM_CONFIG: JSON.stringify({ main: { control_token: 'fake-control', devices: { robot: 'fake-device' } } }),
       PAID_SESSION_ID: 'runtime-test', PAID_SESSION_UNTIL: String(Date.now() + 60000), PAID_SESSION_MAX_CALLS: '2',
     },

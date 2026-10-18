@@ -7,6 +7,12 @@ import type { CallMetrics } from './openai.ts';
 import type { APISample, Stage, snapshot } from './telemetry.ts';
 export const actions = ['idle', 'look_at', 'nod', 'shake', 'happy'] as const;
 export const expressions = ['neutral', 'happy', 'sad', 'surprised', 'thinking'] as const;
+export const headActions = ['left', 'right', 'up', 'down', 'center', 'resume'] as const;
+export type HeadAction = typeof headActions[number];
+export type HeadResponse = { ok: true; device_id: string; pan: number; tilt: number; seq: number; manual_until: number };
+export function isHeadCommand(value: unknown): value is { action: HeadAction } {
+    return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length === 1 && Object.hasOwn(value, 'action') && headActions.includes((value as { action: HeadAction }).action);
+}
 export type Action = typeof actions[number];
 export type Expression = typeof expressions[number];
 export type Role = 'device' | 'viewer' | 'controller';
@@ -168,7 +174,7 @@ export type Decision = {
     };
 };
 export interface ServerData {
-    session: { room: string; device_id: string } & (
+    session: { room: string; device_id: string; behavior_mode?: 'follow_person' | 'autonomous' } & (
         { protocol_version: 1; role: 'viewer' | 'controller' } |
         { protocol_version: 2; role: 'device'; frame_format: 'rgb565le-v2'; width: 160; height: 120 }
     );

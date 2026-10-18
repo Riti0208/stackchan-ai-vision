@@ -421,3 +421,22 @@ encoderはjpeg-js 0.4.4のBSDライセンスを保持した純JS adapter。`node
 RGBA 76800 bytesとencoderの表をisolateで再利用する。roomごとに変換中1枚＋デバイスごとに最新raw 1枚だけを保持し、raw変換の破棄とviewer ACK窓による切断を別々に扱う。
 
 BEデプロイとv2 FW書き込みを協調する。**BE公開後〜FW更新完了までは旧FWはofflineとなる**。旧JPEG fallbackはない。rawは38.4KB/枚で、60fpsには約18.44Mbps/台（通信オーバーヘッド別）が必要。実機のfps/転送時間/変換時間/破棄数/CPUを比較してから性能改善を案内する。
+
+
+## 首の動作モードと手動確認
+
+`BEHAVIOR_MODE=follow_person|autonomous`で切り替える。今回のproduction/local/OpenAIデモ設定は`follow_person`。戻す場合は`autonomous`に変更して再デプロイ・再起動する。未設定/不正値は既存のautonomousを使う。`/health.behavior_mode`、device/viewerのsession.behavior_mode、デバイス一覧のruntime.behavior_modeで確認する。WorkerとRoomの更新伝播には差があるため、公開確認では両方を照合する。
+
+追従は既存の同じperceptionリクエストに人物位置の左右/上下choiceを追加し、API呼び出し数を増やさない。最大の顔、顔が不明瞭なら最大の人物を対象とする粗い分類であり、bboxや正確な座標ではない。中央40〜60%は保持。person_present>=0.5かつ位置confidence>=0.65の軸を、pan±0.08/tilt±0.06ずつ[-1,1]内で更新する。perception直後にlook_atを送り、意向/文章生成を待たない。感情・本音・会話の更新は維持し、性格・avert・heldやsocial gestureが首を上書きしない。
+
+FE controllerは必須ではない。有効なFE detectionは新鮮な人物有り判定をgateに、顔confidence>=0.7、最大10Hz、同じdead zoneとstep上限で補助する。元画像受信から最大6秒・同一stream・API期限内のみ有効。受信frame metadataは最大192件/3秒で、画像キューではない。人無し、位置不確実、期限・世代・停止で追従更新を止める。有効な追従targetだけ1秒ごとに同じ角度を再送し、FWの3秒watchdogに対応する。期限後は再送しない。
+
+`ENABLE_PAID_CONTROL=true`の公開環境はAPI開始前/OFF/停止後に追従待機し、mockの架空人物で実機を動かさない。ローカルmock（paid controlなし）は追従デモが動く。明示開始・期限・回数上限・停止ガードは維持し、最後に予約された有効なAPI応答も使用する。
+
+追従は60fpsのリアルタイム制御ではない。従来実測のperception約2.7秒で最初のstepを出せるが、次の評価は既存の単一runが終わってからなので、意向約0.45秒・文章約2.8秒の待ちが次回cadenceに残りうる。FE座標が有効ならその間を補助できる。今回のテストは偽APIであり、実APIの追加質問後の遅延は未測定。
+
+認証済みモニターの手動操作は`POST /api/control/head?room=...&device_id=...`へ`{"action":"left|right|up|down|center|resume"}`を送る。API OFFでも使用可。左右上下は現在の指令targetから0.2ずつ、centerは0/0。look_at 500ms、既存expressionを保持しseqを更新する。10秒間は全自動の首・内部角度更新を止め、1秒keepaliveでtargetを維持する。resumeは解除のみで新しいseqを発行しない。再接続は手動状態をクリアする。HTTPのokは指令targetの受付であり、FW到達/実行はaction_ackで別途確認する。
+
+## 実機01の暫定RGB565補正
+
+productionの`RGB565_BIG_ENDIAN_DEVICES=stackchan-01`は、LEと宣言しながら実bufferがMSB-firstの既知FW profileだけを補正する。SCFW format 1の標準LE契約やsimulator/02は変更しない。local/OpenAIデモは未指定、smokeは空文字にしてLEを維持する。telemetryのinput_byte_orderとbyte_order_overrideで適用を確認する。FW修正後はこの変数から01を削除して再デプロイする。詳細は[色互換補正の記録](../doc/raw_camera_color_compatibility.md)。

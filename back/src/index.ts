@@ -1,9 +1,10 @@
+import { behaviorMode, manualTarget, coarseTarget, detectedTarget, followFresh, FOLLOW_MAX_AGE_MS, FOLLOW_INTERVAL_MS, type FollowGate } from './follow-person.ts';
 import { APIDebugCache, type APIDebug } from './api-debug.ts';
 import { parseRawFrame, encodeRawFrame, LatestFrames, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
 import { FrameWindow } from './frame-window';
 import { monitorHTML, monitorJS } from './monitor';
 import { logConnection, logRun, logTransport } from './observability';
-import { serializeServer, parseClientMessage, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
+import { serializeServer, parseClientMessage, isHeadCommand, type HeadResponse, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
 import { paidSession, reservePaidCall, guardedFetch, controlledBudget, updatePaidSession, type BudgetStatus, type ControlledPaidEnv } from './paid-session';
 import { newHistory, newTransport, recordRun, receiveFrame, addSample, pacing, snapshot, type History, type Transport, type Pipeline, type Stage } from './telemetry';
 import { initialHumanActions, scanHumanActions, consumeHumanAction, type HumanActionState } from './human-actions';
@@ -14,7 +15,7 @@ import { initialMind, planFor, socialContext, mockChoice, type Mind, type Behavi
 import { evaluationPayload, parseEvaluation, mockEvaluation, projectExperiences, emotionKeys, type Emotion, type Experience, type Affect } from './perception';
 interface Env extends ControlledPaidEnv {
   ROOMS: DurableObjectNamespace; ASSETS?: Fetcher; ROOM_CONFIG?: string; SESSION_SECRET?: string;
-  ALLOWED_ORIGIN?: string; ENABLE_LAB?: string; AI_MODE?: string; OPENAI_API_KEY?: string; STREAM_FPS?: string; EVAL_INTERVAL_MS?: string; NARRATION_INTERVAL_MS?: string;
+  ALLOWED_ORIGIN?: string; ENABLE_LAB?: string; AI_MODE?: string; OPENAI_API_KEY?: string; RGB565_BIG_ENDIAN_DEVICES?: string; BEHAVIOR_MODE?: string; STREAM_FPS?: string; EVAL_INTERVAL_MS?: string; NARRATION_INTERVAL_MS?: string;
 }
 type Config = Record<string, { control_token: string; devices: Record<string, string>; profiles?: Record<string, Personality> }>;
 type Action = ServerData['action']['action'];
@@ -27,9 +28,11 @@ type Device = {
   retryAt: number; lastDecision: number; lastAI: number; busy: boolean; gestureUntil: number; lastDetection: number; lastGesture: number;
   lastTextAt: number; textRetryAt: number; textEmotion?: Emotion;
   metrics: History; transport: Transport; lastTelemetry: number; lastTransportLog?: number; actionSentAt: Map<number, { sent: number; frame_at?: number }>; human: HumanActionState; lastChoice?: string; affectiveHistory: Experience[]; firstJoinAt: number | null; totalExperiences: number;
+  headSource?: 'manual' | 'follow' | 'autonomous'; lastHeadAt?: number; manualUntil?: number; lastManualAt?: number; evaluation?: AbortController; follow?: FollowGate; lastFollowOrder?: number; lastFollowAt?: number;
   latest?: { bytes: Uint8Array; id: number; order: number; at: number };
 };
 type Identity = { human?: HumanActionState; version: 1; firstJoinAt: number; updatedAt: number; totalExperiences: number; mind: Mind; emotion: Emotion; affectiveHistory: Experience[]; publicHistory: Dialogue[]; experienced: string[] };
+const MAX_FRAME_METADATA = 192; // >3s at the configured maximum 60fps, metadata only.
 const ident = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const offline = (): DeviceStatus => ({ online: false, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' });
 const clamp = (x: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
@@ -76,7 +79,7 @@ export default {
     if (url.pathname === '/health') {
       const state: BudgetStatus = env.ENABLE_PAID_CONTROL === 'true' || env.AI_MODE === 'decisions' ? await (await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : paidSession(env);
       const mode = env.ENABLE_PAID_CONTROL === 'true' ? state.active ? 'decisions' : 'mock' : env.AI_MODE || 'mock';
-      return json({ paid_session: state, paid_control: { enabled: env.ENABLE_PAID_CONTROL === 'true', key_configured: !!env.OPENAI_API_KEY?.trim(), room: env.PAID_CONTROL_ROOM || 'main' }, ok: true, ai_mode: mode, protocol_version: 1, device_protocol_version: 2, ai_model: mode === 'decisions' ? DECISIONS_MODEL : null, narration_model: mode === 'decisions' ? DECISIONS_MODEL : null, ai_configured: mode !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
+      return json({ paid_session: state, paid_control: { enabled: env.ENABLE_PAID_CONTROL === 'true', key_configured: !!env.OPENAI_API_KEY?.trim(), room: env.PAID_CONTROL_ROOM || 'main' }, ok: true, behavior_mode: behaviorMode(env), ai_mode: mode, protocol_version: 1, device_protocol_version: 2, ai_model: mode === 'decisions' ? DECISIONS_MODEL : null, narration_model: mode === 'decisions' ? DECISIONS_MODEL : null, ai_configured: mode !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
     }
     if (url.pathname === '/' || url.pathname.startsWith('/lab')) {
       if (!env.ASSETS || (url.pathname.startsWith('/lab') && env.ENABLE_LAB !== 'true')) return fail(404, 'not_found');
@@ -95,6 +98,19 @@ export default {
       if (!config(env)[room]) return fail(404, 'not_found');
       const internal = new Request(`https://room.internal/login?room=${room}`, { method: 'POST', body: JSON.stringify(body), headers: { 'X-Client-IP': req.headers.get('CF-Connecting-IP') || 'local', 'X-Secure': String(url.protocol === 'https:') } });
       return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(internal);
+    }
+    if (url.pathname === '/api/control/head') {
+      if (req.method !== 'POST') return fail(405, 'method_not_allowed');
+      if (req.headers.get('Origin') !== env.ALLOWED_ORIGIN) return fail(403, 'forbidden');
+      const id = url.searchParams.get('device_id') || '', registered = config(env)[room];
+      if (!ident.test(room) || !ident.test(id) || !registered || !Object.hasOwn(registered.devices, id)) return fail(404, 'not_found');
+      if (!await session(req, room, env)) return fail(401, 'unauthorized');
+      if (!(req.headers.get('Content-Type') || '').startsWith('application/json')) return fail(400, 'invalid_request');
+      if (Number(req.headers.get('Content-Length') || 0) > 1024) return fail(413, 'invalid_request');
+      const text = await req.text(); if (new TextEncoder().encode(text).byteLength > 1024) return fail(413, 'invalid_request');
+      let command: unknown; try { command = JSON.parse(text); } catch { return fail(400, 'invalid_request'); }
+      if (!isHeadCommand(command)) return fail(400, 'invalid_head_action');
+      return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(`https://room.internal/manual-head?room=${room}&device_id=${id}`, { method: 'POST', body: JSON.stringify(command) });
     }
     if (url.pathname === '/api/control/paid-session') {
       if (req.method !== 'POST') return fail(405, 'method_not_allowed');
@@ -156,8 +172,10 @@ export class Room {
   private pendingAI = new Set<AbortController>();
   private rawFrames = new LatestFrames<{ d: Device; p: Peer; stream: string; raw: RawFrame; at: number; order: number }>();
   private conversionScheduled = false;
+  private bigEndianDevices: Set<string>;
   constructor(private ctx: DurableObjectState, private env: Env, private aiFetch: typeof fetch = (input, init) => fetch(input, init)) {
     this.aiFetch = aiFetch;
+    this.bigEndianDevices = new Set((env.RGB565_BIG_ENDIAN_DEVICES || '').split(',').map(id => id.trim()).filter(Boolean));
     this.ready = ctx.blockConcurrencyWhile(async () => {
       [this.identities, this.metricHistory] = await Promise.all([ctx.storage.list<Identity>({ prefix: 'identity:' }), ctx.storage.list<History>({ prefix: 'telemetry:' })]);
     });
@@ -222,7 +240,7 @@ export class Room {
     }
     if (url.pathname === '/paid-state-changed' && req.method === 'POST') {
       for (const controller of this.pendingAI) controller.abort();
-      for (const d of this.devices.values()) { d.retryAt = 0; d.lastAI = 0; d.textRetryAt = 0; d.lastTextAt = 0; }
+      for (const d of this.devices.values()) { d.follow = undefined; d.lastFollowOrder = -1; d.retryAt = 0; d.lastAI = 0; d.textRetryAt = 0; d.lastTextAt = 0; }
       return json({ ok: true });
     }
     if (url.pathname === '/login') {
@@ -237,7 +255,23 @@ export class Room {
       const payload = b64(JSON.stringify({ room, sid, expires }));
       return json({ room, authenticated: true, expires_in: 43200 }, 200, { 'Set-Cookie': `sc_control_${room}=${payload}.${await sign(payload, this.env.SESSION_SECRET!)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${req.headers.get('X-Secure') === 'true' ? '; Secure' : ''}` });
     }
-    if (url.pathname === '/list') return json({ room, runtime: { ai_mode: this.lastRuntimeMode, paid_control_enabled: this.env.ENABLE_PAID_CONTROL === 'true', key_configured: !!this.env.OPENAI_API_KEY?.trim(), version: this.env.VERSION_METADATA?.id || null }, devices: Object.keys(config(this.env)[room].devices).map(device_id => ({ device_id, online: !!this.device(device_id, room).peer })) });
+    if (url.pathname === '/manual-head' && req.method === 'POST') {
+      const id = url.searchParams.get('device_id') || '', d = this.device(id, room);
+      if (!d.peer || !d.stream) return fail(409, 'device_offline');
+      const command: unknown = await req.json();
+      if (!isHeadCommand(command)) return fail(400, 'invalid_head_action');
+      const now = Date.now();
+      if (now - (d.lastManualAt ?? -Infinity) < 100) return fail(429, 'head_rate_limited');
+      d.lastManualAt = now;
+      if (command.action === 'resume') d.manualUntil = 0;
+      else {
+        const target = manualTarget(d.pan, d.tilt, command.action); d.pan = target.pan; d.tilt = target.tilt; d.manualUntil = now + 10000;
+        this.action(d, 'look_at', d.behavior?.command.expression || 'neutral', 500, '手動操作', undefined, false, true);
+      }
+      const result: HeadResponse = { ok: true, device_id: id, pan: d.pan, tilt: d.tilt, seq: d.seq, manual_until: d.manualUntil || 0 };
+      return json(result);
+    }
+    if (url.pathname === '/list') return json({ room, runtime: { behavior_mode: behaviorMode(this.env), ai_mode: this.lastRuntimeMode, paid_control_enabled: this.env.ENABLE_PAID_CONTROL === 'true', key_configured: !!this.env.OPENAI_API_KEY?.trim(), version: this.env.VERSION_METADATA?.id || null }, devices: Object.keys(config(this.env)[room].devices).map(device_id => ({ device_id, online: !!this.device(device_id, room).peer })) });
     const id = url.searchParams.get('device_id')!, d = this.device(id, room);
     const role = req.headers.get('X-Role') as Peer['role'], sid = req.headers.get('X-Sid') || undefined;
     if (role === 'controller' && d.controller && d.controller.sid !== sid) return fail(409, 'controller_busy');
@@ -255,10 +289,10 @@ export class Room {
       } else {
         d.mind = { ...d.mind, revision: d.mind.revision + 1, intent: 'observe', target: { kind: 'person', device_id: null }, cause: { kind: 'observation', message_id: null }, valid_until: 0 };
       }
-      d.lastAI = 0; d.retryAt = 0; d.lastGesture = 0; d.behavior = undefined; d.inbox = []; d.greeted.clear();
-      d.lastTextAt = 0; d.textRetryAt = 0; d.textEmotion = undefined; d.busy = false; d.lastChoice = undefined; d.human = initialHumanActions(d.human);
+      d.manualUntil = 0; d.lastManualAt = undefined; d.lastHeadAt = 0; d.headSource = undefined; d.evaluation?.abort(); d.follow = undefined; d.lastFollowOrder = -1; d.lastFollowAt = 0; d.retryAt = 0; d.lastGesture = 0; d.behavior = undefined; d.inbox = []; d.greeted.clear();
+      d.lastTextAt = 0; d.textRetryAt = 0; d.textEmotion = undefined; d.lastChoice = undefined; d.human = initialHumanActions(d.human);
       await this.persist(d);
-      d.peer = p; d.stream = crypto.randomUUID(); d.transport = newTransport(d.stream); d.actionSentAt.clear(); d.latest = undefined; d.frames.clear();
+      d.peer = p; d.stream = crypto.randomUUID(); d.transport = newTransport(d.stream, this.bigEndianDevices.has(id) ? 'big' : 'little'); d.actionSentAt.clear(); d.latest = undefined; d.frames.clear();
       d.seq = 0; d.pan = 0; d.tilt = 0; this.rawFrames.cancel(d.id); d.inputId = undefined; d.order = 0; d.detectedOrder = -1; d.lastDecision = -1; d.gestureUntil = 0; d.lastDetection = 0;
       d.status = { online: true, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' };
       logConnection(d, true);
@@ -268,7 +302,7 @@ export class Room {
       if (role === 'controller') { if (d.controller) { d.viewers.delete(d.controller); close(d.controller, 4001, 'replaced'); } d.controller = p; }
       d.viewers.add(p);
     }
-    send(p, 'session', role === 'device' ? { ...deviceSession, room, device_id: id, role } : { protocol_version: 1, room, device_id: id, role });
+    send(p, 'session', role === 'device' ? { ...deviceSession, behavior_mode: behaviorMode(this.env), room, device_id: id, role } : { protocol_version: 1, behavior_mode: behaviorMode(this.env), room, device_id: id, role });
     if (role !== 'device') { send(p, 'stream', { stream_id: d.stream }); send(p, 'emotion', d.emotion); send(p, 'device_status', d.status); send(p, 'mind', d.mind); send(p, 'behavior', d.behavior || null); send(p, 'dialogue_history', { messages: this.dialogue }); send(p, 'memory', this.memory(d)); send(p, 'telemetry', this.telemetry(d)); }
     if (p.monitor) for (const activity of this.activeAPICalls.values()) if (activity.device_id === id) send(p, 'api_activity', activity);
     server.addEventListener('message', event => this.message(p, d, event.data));
@@ -279,6 +313,7 @@ export class Room {
   }
   private cleanup(p: Peer, d: Device) {
     if (p.role === 'device' && d.peer === p) {
+      d.evaluation?.abort(); d.follow = undefined;
       if (this.rawFrames.cancel(d.id)) d.transport.conversion_dropped++;
       logConnection(d, false);
       this.cancelConversations(d.id);
@@ -344,7 +379,13 @@ export class Room {
       const frame = d.frames.get(a.frame_id);
       if (a.stream_id !== d.stream || !frame || Date.now() - frame.at > 3000 || frame.order <= d.detectedOrder) return;
       d.detectedOrder = frame.order; d.lastDetection = Date.now();
-      if (d.gestureUntil > Date.now() || d.mind.intent !== 'observe') return;
+      if (behaviorMode(this.env) === 'follow_person') {
+        if (Date.now() < (d.manualUntil || 0) || !primary || !followFresh(d.follow, d.stream, Date.now()) || frame.order < d.follow!.order || Date.now() - (d.lastFollowAt || 0) < FOLLOW_INTERVAL_MS) return;
+        const target = detectedTarget(d.pan, d.tilt, primary);
+        if (target) { d.pan = target.pan; d.tilt = target.tilt; d.lastFollowAt = Date.now(); this.action(d, 'look_at', 'thinking', 250, '人物に追従', undefined, true); }
+        return;
+      }
+      if (Date.now() < (d.manualUntil || 0) || d.gestureUntil > Date.now() || d.mind.intent !== 'observe') return;
       if (!primary) { this.action(d, 'idle', 'neutral', 500); return; }
       d.pan = clamp(d.pan + (primary.x + primary.width / 2 - .5) * .3, -1, 1);
       d.tilt = clamp(d.tilt - (primary.y + primary.height / 2 - .5) * .3, -1, 1);
@@ -361,7 +402,7 @@ export class Room {
         if (!item) return;
         const { d, p, stream, raw, at, order } = item;
         if (d.peer !== p || d.stream !== stream || Date.now() - at > RAW_MAX_AGE_MS) { d.transport.conversion_dropped++; return; }
-        const transport = d.transport, started = performance.now(), packet = encodeRawFrame(raw);
+        const transport = d.transport, started = performance.now(), packet = encodeRawFrame(raw, d.transport.input_byte_order);
         // Production Workers clocks advance on I/O only. Include a timer yield so
         // the bounded sample measures encode + scheduler wall time, never fake CPU=0.
         await new Promise<void>(resolve => setTimeout(resolve, 0));
@@ -371,7 +412,7 @@ export class Room {
         transport.published_total++;
         d.latest = { bytes: packet.subarray(4), id: raw.id, order, at };
         d.frames.set(raw.id, { order, at });
-        for (const [key, value] of d.frames) if (at - value.at > RAW_MAX_AGE_MS || d.frames.size > 16) d.frames.delete(key);
+        for (const [key, value] of d.frames) { if (at - value.at <= RAW_MAX_AGE_MS && d.frames.size <= MAX_FRAME_METADATA) break; d.frames.delete(key); }
         for (const viewer of d.viewers) {
           if (viewer.monitor) continue;
           if (!viewer.frames.canSend(packet.byteLength, completed)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
@@ -382,9 +423,10 @@ export class Room {
       } finally { this.conversionScheduled = false; this.scheduleConversion(); }
     }, 0);
   }
-  private action(d: Device, action: Action, expression: Motion['expression'], duration_ms: number, display_text = '穏やかな表情で待つ', run?: Pipeline) {
-    if (!d.peer) return;
+  private action(d: Device, action: Action, expression: Motion['expression'], duration_ms: number, display_text = '穏やかな表情で待つ', run?: Pipeline, following = false, manual = false) {
+    if (!d.peer || (!manual && Date.now() < (d.manualUntil || 0)) || (!manual && behaviorMode(this.env) === 'follow_person' && !following)) return;
     if (['nod', 'shake', 'happy'].includes(action)) { d.gestureUntil = Date.now() + duration_ms; d.lastGesture = Date.now(); }
+    d.lastHeadAt = Date.now(); d.headSource = manual ? 'manual' : following ? 'follow' : 'autonomous';
     const command: Motion = { seq: ++d.seq, action, pan: d.pan, tilt: d.tilt, expression, duration_ms };
     d.actionSentAt.set(command.seq, { sent: performance.now(), frame_at: run?.frame_received_at });
     if (d.actionSentAt.size > 32) d.actionSentAt.delete(d.actionSentAt.keys().next().value!);
@@ -395,6 +437,11 @@ export class Room {
   private tick() {
     const now = Date.now(), monotonicNow = performance.now();
     for (const d of this.devices.values()) {
+      if (d.follow && !followFresh(d.follow, d.stream, now)) d.follow = undefined;
+      if (d.peer && now - (d.lastHeadAt || 0) >= 1000) {
+        if (now < (d.manualUntil || 0)) this.action(d, 'look_at', d.behavior?.command.expression || 'neutral', 500, '手動操作', undefined, false, true);
+        else if (behaviorMode(this.env) === 'follow_person' && d.headSource === 'follow' && followFresh(d.follow, d.stream, now)) this.action(d, 'look_at', d.behavior?.command.expression || 'thinking', 250, '人物に追従（位置保持）', undefined, true);
+      }
       if (now - d.lastTelemetry >= 5000) { const data = this.telemetry(d); this.broadcast(d, 'telemetry', data);  d.lastTelemetry = now; }
       if (d.peer && now - (d.lastTransportLog || 0) >= 5000) { logTransport(d, this.telemetry(d)); d.lastTransportLog = now; }
       for (const viewer of d.viewers) if (viewer.frames.expired(monotonicNow)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); }
@@ -409,26 +456,30 @@ export class Room {
         d.lastAI = now; d.busy = true;
         const started = performance.now();
         const run: Pipeline = { id: crypto.randomUUID(), stream_id: stream!, frame_id: d.latest.id, frame_received_at: d.latest.at, started_at: now, completed_at: 0, duration_ms: 0, outcome: 'discarded', reason: 'state_changed', api: [] };
-        const controller = new AbortController(); this.pendingAI.add(controller);
+        const controller = new AbortController(); d.evaluation = controller; this.pendingAI.add(controller);
         this.ctx.waitUntil(this.decide(d, run, controller.signal).catch(error => {
-          if (controller.signal.aborted) { run.reason = 'paid_session_changed'; return; }
+          if (controller.signal.aborted) { run.reason = d.stream === stream ? 'paid_session_changed' : 'stream_changed'; return; }
           run.outcome = 'error'; run.reason = error instanceof OpenAIError ? `http_${error.status}` : 'evaluation_failed';
-          const last = run.api.at(-1); if (error instanceof Error && /^(Invalid|Missing|Duplicate)/.test(error.message) && last?.outcome === 'success') last.outcome = 'invalid_response';
+          const last = run.api.at(-1);
+          if (d.stream === stream && last?.stage === 'perception') d.follow = undefined; if (error instanceof Error && /^(Invalid|Missing|Duplicate)/.test(error.message) && last?.outcome === 'success') last.outcome = 'invalid_response';
           if (d.stream !== stream) return;
           const retry = error instanceof OpenAIError ? error.retryAfterMs : 10000;
           d.retryAt = Date.now() + retry;
           this.broadcast(d, 'error', { code: 'ai_unavailable', message: error instanceof OpenAIError ? error.message : 'AI evaluation failed; state preserved', retry_after_ms: retry });
-        }).finally(async () => { this.pendingAI.delete(controller); if (d.stream === stream) d.busy = false; await this.finishRun(d, run, started); }));
+        }).finally(async () => { this.pendingAI.delete(controller); if (d.evaluation === controller) { d.evaluation = undefined; d.busy = false; } await this.finishRun(d, run, started); }));
       }
     }
   }
   private async decide(d: Device, run: Pipeline, signal: AbortSignal) {
     const frame = d.latest!, stream = d.stream!, before = { ...d.emotion };
+    const following = behaviorMode(this.env) === 'follow_person';
     const controlled = this.env.ENABLE_PAID_CONTROL === 'true';
     const status: BudgetStatus | undefined = controlled ? await (await this.env.ROOMS.get(this.env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : undefined;
     if (signal.aborted || d.stream !== stream || !d.peer) return;
     const mode = controlled ? status?.active ? 'decisions' : 'mock' : this.env.AI_MODE;
     this.lastRuntimeMode = mode || 'unknown';
+    const canFollow = following && (!controlled || mode === 'decisions');
+    if (following && !canFollow) d.follow = undefined;
     const runEnv = controlled ? { AI_MODE: mode, PAID_SESSION_ID: status?.session_id || '', PAID_SESSION_UNTIL: String(status?.expires_at || 0), PAID_SESSION_MAX_CALLS: String(status?.max_calls || 0) } : this.env;
     const aiFetch = guardedFetch(runEnv, async () => {
       const url = new URL('https://room.internal/paid-budget');
@@ -442,16 +493,33 @@ export class Room {
     const historySize = d.affectiveHistory.length;
     let evaluation: ReturnType<typeof parseEvaluation>;
     if (mode === 'mock') {
-      evaluation = mockEvaluation(frame.id, before, d.mind.personality, incomingIsNew, d.affectiveHistory);
+      evaluation = mockEvaluation(frame.id, before, d.mind.personality, incomingIsNew, d.affectiveHistory, following);
     } else if (mode === 'decisions') {
       const bytes = frame.bytes; let binary = '';
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-      const first = await this.ask(d, run, 'perception', evaluationPayload(`data:image/jpeg;base64,${btoa(binary)}`, socialContext(d.mind, before, undefined, peers, incoming, started, d.publicHistory.slice(-6)), d.affectiveHistory, incomingIsNew), calls, aiFetch);
-      evaluation = parseEvaluation(first);
+      const first = await this.ask(d, run, 'perception', evaluationPayload(`data:image/jpeg;base64,${btoa(binary)}`, socialContext(d.mind, before, undefined, peers, incoming, started, d.publicHistory.slice(-6)), d.affectiveHistory, incomingIsNew, following), calls, aiFetch);
+      evaluation = parseEvaluation(first, following);
     } else throw new Error('Unknown AI_MODE');
     const { observations, emotion: next } = evaluation;
     const valid = () => !signal.aborted && d.stream === stream && !!d.peer && Date.now() - frame.at <= 10000 && frame.order > d.lastDecision;
     if (!valid()) { run.reason = 'stale_frame_or_stream'; return; }
+    let trackingIssued = false;
+    if (canFollow && frame.order > (d.lastFollowOrder ?? -1)) {
+      // A stopped/expired session must not authorize even the early neck command.
+      if (controlled && mode === 'decisions') {
+        const current: BudgetStatus = await (await this.env.ROOMS.get(this.env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json();
+        if (current.session_id !== status?.session_id || ['stopped','expired','deployment_changed','not_started'].includes(current.reason || '')) { d.follow = undefined; run.reason = 'paid_session_stopped'; return; }
+      }
+      if (!valid() || Date.now() - frame.at > FOLLOW_MAX_AGE_MS) { d.follow = undefined; run.reason = 'stale_follow_frame'; return; }
+      d.lastFollowOrder = frame.order;
+      d.follow = observations.person_present >= .5 ? { stream, order: frame.order, frameAt: frame.at, until: Math.min(frame.at + FOLLOW_MAX_AGE_MS, mode === 'decisions' ? status?.expires_at || paidSession(this.env).expires_at || 0 : Infinity) } : undefined;
+      const target = d.follow && evaluation.position ? coarseTarget(d.pan, d.tilt, evaluation.position) : null;
+      if (!target && d.headSource === 'follow') d.headSource = undefined;
+      if (target && Date.now() >= (d.manualUntil || 0) && followFresh(d.follow, d.stream, Date.now())) {
+        d.pan = target.pan; d.tilt = target.tilt; d.lastFollowAt = Date.now(); trackingIssued = true;
+        this.action(d, 'look_at', 'thinking', 250, mode === 'mock' ? '人物に追従（mock）' : '人物に追従', run, true);
+      }
+    }
     const now = Date.now();
     const scan = scanHumanActions(d.human, observations, { order: frame.order, frame_id: frame.id, stream_id: stream!, at: now });
     d.human = scan.state;
@@ -490,7 +558,7 @@ export class Room {
       return !incoming || (incoming.expires_at > Date.now() && this.devices.get(incoming.from_device_id)?.stream === incoming.from_stream_id && d.inbox.some(m => m.id === incoming.id));
     };
     if (!socialValid()) { run.reason = 'social_state_changed'; return; }
-    if (!held && Date.now() < d.gestureUntil) { run.reason = 'gesture_busy'; return; }
+    if (!following && !held && Date.now() < d.gestureUntil) { run.reason = 'gesture_busy'; return; }
     const plan = planFor(choice, d.mind.personality);
     let text = { thought: d.mind.thought, public_text: null as string | null }, generation = d.mind.generation;
     if (!held && (!!humanEvent || needsNarration(d.mind, choice, next, d.textEmotion))) {
@@ -532,18 +600,18 @@ export class Room {
     // A held intention remains intact: no repeated gesture or speech on each frame.
     if (!held) {
       d.mind = { device_id: d.id, revision: d.mind.revision + 1, personality: d.mind.personality, intent: plan.intent, target: plan.target, thought: text.thought, generation, relationships, cause: { kind: isReceived ? 'dialogue' : humanEvent ? 'human_action' : 'observation', message_id: isReceived ? incoming!.id : null, ...(humanEvent ? { event_id: humanEvent.id } : {}) }, valid_until: Date.now() + 6000 };
-      if (plan.pan !== undefined) d.pan = plan.pan;
-      if (plan.tilt !== undefined) d.tilt = plan.tilt;
+      if (!following && Date.now() >= (d.manualUntil || 0) && plan.pan !== undefined) d.pan = plan.pan;
+      if (!following && Date.now() >= (d.manualUntil || 0) && plan.tilt !== undefined) d.tilt = plan.tilt;
       this.broadcast(d, 'mind', d.mind);
     }
     if (held && relationships !== d.mind.relationships) { d.mind = { ...d.mind, relationships }; this.broadcast(d, 'mind', d.mind); }
     const humanGesture = choice === 'acknowledge_person' || choice === 'delight';
-    const issueCommand = !held && (!d.behavior || !!humanEvent || isSpeech || isReceived || (!humanGesture && d.lastChoice !== choice));
+    const issueCommand = Date.now() >= (d.manualUntil || 0) && !following && !held && (!d.behavior || !!humanEvent || isSpeech || isReceived || (!humanGesture && d.lastChoice !== choice));
     const trigger = humanEvent ? 'human_action' : isReceived ? 'dialogue' : newCompanion ? 'companion' : held ? 'held' : !d.lastChoice ? 'initial' : 'periodic';
     if (!held) d.lastChoice = choice;
     this.broadcast(d, 'emotion', d.emotion);
     const affect: Affect = { provider: mode === 'decisions' ? 'openai' : 'mock', model: mode === 'decisions' ? DECISIONS_MODEL : null, previous_emotion: before, confidence: evaluation.confidence, history_size: historySize, received_message_is_new: incomingIsNew };
-    this.broadcast(d, 'decision', { stream_id: stream, frame_id: frame.id, observations, affect, human_action: humanEvent || null, reaction: { trigger, intent_reassessed: !held, command_issued: issueCommand, selected_choice: choice, event_id: humanEvent?.id || null }, selected_action: issueCommand ? plan.action : d.behavior?.command.action || 'idle', confidence, mind_revision: d.mind.revision, intent: d.mind.intent, ai: summarizeCalls(calls, mode === 'decisions') });
+    this.broadcast(d, 'decision', { stream_id: stream, frame_id: frame.id, observations, affect, human_action: humanEvent || null, reaction: { trigger, intent_reassessed: !held, command_issued: issueCommand || trackingIssued, selected_choice: choice, event_id: humanEvent?.id || null }, selected_action: issueCommand ? plan.action : d.behavior?.command.action || 'idle', confidence, mind_revision: d.mind.revision, intent: d.mind.intent, ai: summarizeCalls(calls, mode === 'decisions') });
     const lastExperience = d.affectiveHistory.at(-1);
     if (!lastExperience || humanEvent || incomingIsNew || lastExperience.intent !== d.mind.intent || emotionKeys.some(k => Math.abs(lastExperience.emotion_after[k] - next[k]) >= .1)) {
       d.totalExperiences++;

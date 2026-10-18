@@ -20,7 +20,8 @@
     }
   ],
   "vars": {
-    "AI_MODE": "mock",
+    "RGB565_BIG_ENDIAN_DEVICES": "stackchan-01",
+    "BEHAVIOR_MODE": "follow_person", "AI_MODE": "mock",
     "ENABLE_LAB": "false",
     "ENABLE_PAID_CONTROL": "true",
     "PAID_CONTROL_ROOM": "main",

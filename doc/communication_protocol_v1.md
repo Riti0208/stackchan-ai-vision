@@ -668,3 +668,23 @@ rawは38416 bytes/枚で、60fpsなら約18.44Mbps/台（WS/TLS/TCP別）。60fp
 画像data URLは `{omitted:"image",mime_type:"image/jpeg",bytes:1136}` 等へ置換し、画像本体は保持・転送しない。Authorization/Cookie等のヘッダーは収集せず、本文に反射された既知のAPIキーや機密フィールド値も伏せる。診断用の置換・省略があるため、画面のJSONはwire bytesそのものではなく実内容のサニタイズ済み表示。bytesは省略前UTF-8本文サイズ、エラー本文が上限で打ち切られた場合は取得済みサイズの下限。
 
 本文は各24KiB、文字列・深さ・項目数にも上限を設け、超過箇所を明示する。Room内の専用メモリーキャッシュで直近20件・合計1MiB・取得可能期間10分に制限し、Durable Object storageやCloudflare console/logには保存しない。再起動・デプロイで本文は失われる。ブラウザは選択した1件だけを本文DOMへ展開し、詳細を閉じる／切断で本文を消す。既存の120件統計履歴と本文の保持件数は異なる。
+
+
+## 動作モードと手動首操作
+
+Env `BEHAVIOR_MODE=follow_person|autonomous`。今回の公開/ローカルはfollow_person、既存自由判断はautonomousで保持する。health.behavior_mode、session.behavior_mode（追加optional項目）、一覧runtime.behavior_modeで観測できる。モード変更自体はAPIを開始しない。
+
+follow_personは同じperceptionのquestionsに`person_horizontal` choice（left/center/right/unknown）と`person_vertical` choice（upper/center/lower/unknown）を追加する。返却は既存choiceの`choice`/`confidence`。最大の見える顔、顔が明瞭でなければ最大の人物の同じ中心を対象とする。中央40〜60%は保持し、正確な座標/bboxは推定させない。person_present>=0.5、各軸confidence>=0.65でpan±0.08、tilt±0.06の有界stepをperception直後に反映する。
+人物有りgateは元画像受信から最大6000msかつsession期限まで。同一stream/新しい評価だけを適用し、停止済み応答は捨てる。FE補助はgateが新鮮な場合だけ、顔confidence>=0.7、最大10Hz、中央dead zone/同じ最大stepで受け付ける。全角度は[-1,1]。公開paid control環境のAPI OFF時は追従待機、ローカルmockだけデモ追従する。既存の明示開始・期限・予算・停止を維持する。
+
+`POST /api/control/head?room=<room>&device_id=<id>`は既存room Cookie認証とexact Origin、Content-Type application/jsonを要求する。本文は1024 bytes以下、`{"action":"left"}`のaction 1項目のみ。left/right/up/down/center/resumeを許可し、他キーや値を拒否する。未知room/deviceは404、未認証401、Origin違反403、不正入力400、超過413、offline409、100ms未満の連続操作429。controller leaseは取得しない。
+
+左右上下はBEの現在の指令targetから0.2ずつ（right=pan+、up=tilt+）、centerは0/0。[-1,1]にclampしlook_at 500msで既存expressionを保持する。FW換算pan±30度/tilt±15度の正規化絶対targetで、実測角度ではない。
+
+```json
+{"ok":true,"device_id":"stackchan-01","pan":0.2,"tilt":0,"seq":12,"manual_until":1792300010000}
+```
+
+manual_untilまで10秒は全自動のhead command・pan/tilt更新を抑止する。感情/本音/会話更新は継続可。FWの3秒watchdogに対して手動は1秒ごとに同targetのlook_atを再送し、そのたびseqを更新する。resumeは即解除のみで新規seqを発行しない。期限後/resume後は新鮮な追従gateに従い、古い観測だけでは再開しない。再接続で手動stateとseqをリセットする。HTTP応答は受付で、到達/受理は既存action_ackとtelemetryで別途確認する。
+
+実機固有の`RGB565_BIG_ENDIAN_DEVICES`補正適用はtelemetry.transportの`input_byte_order: little|big`と`byte_order_override: boolean`で示す。raw format 1の標準契約はLEのまま。productionの既知01以外は未適用。

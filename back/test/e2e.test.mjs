@@ -48,7 +48,7 @@ before(async () => {
   const configuration = JSON.parse(await readFile('wrangler.local.jsonc', 'utf8'));
   configuration.main = resolve('src/index.ts'); configuration.assets.directory = resolve('lab'); configuration.name = 'stackchan-e2e'; delete configuration.$schema;
   // These intention/lease fixtures exercise the explicit 2s evaluation cadence independently of production defaults.
-  configuration.vars.EVAL_INTERVAL_MS = '2000';
+  configuration.vars.EVAL_INTERVAL_MS = '2000'; configuration.vars.BEHAVIOR_MODE = 'autonomous';
   await writeFile(`${fixture}/wrangler.jsonc`, JSON.stringify(configuration));
   const vars = await readFile('.dev.vars.example', 'utf8');
   const match = vars.match(/^ROOM_CONFIG='(.+)'$/m);
@@ -333,7 +333,7 @@ test('device v2 contract rejects every malformed raw header and legacy JPEG uplo
  for(const packet of invalid){
   const device=await connect('stackchan-02','device','dev-device-02');
   const session=(await device.wait(m=>m.type==='session')).data;
-  assert.deepEqual(session,{protocol_version:2,frame_format:'rgb565le-v2',width:160,height:120,room:'main',device_id:'stackchan-02',role:'device'});
+  assert.deepEqual(session,{protocol_version:2,frame_format:'rgb565le-v2',width:160,height:120,behavior_mode:'autonomous',room:'main',device_id:'stackchan-02',role:'device'});
   const closed=once(device.ws,'close');device.ws.send(packet);const [code]=await closed;
   assert.equal(code,packet.length>38416?1009:1008);
  }

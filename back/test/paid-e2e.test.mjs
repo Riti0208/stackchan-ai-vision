@@ -13,7 +13,7 @@ async function fixture(vars) {
   const cfg = JSON.parse(await readFile('wrangler.local.jsonc', 'utf8')); delete cfg.$schema;
   cfg.main = resolve('test/fixtures/budget-worker.ts'); cfg.assets.directory = resolve('lab');
   const rooms = Object.fromEntries(['main', 'other', 'third'].map(room => [room, { control_token: 'fake', devices: { robot: 'fake-device' } }]));
-  Object.assign(cfg.vars, { AI_MODE: 'decisions', OPENAI_API_KEY: 'fake-not-real', SESSION_SECRET: 'fake-signing', ALLOWED_ORIGIN: 'http://127.0.0.1:8787', ROOM_CONFIG: JSON.stringify(rooms), ...vars });
+  Object.assign(cfg.vars, { BEHAVIOR_MODE: 'autonomous', AI_MODE: 'decisions', OPENAI_API_KEY: 'fake-not-real', SESSION_SECRET: 'fake-signing', ALLOWED_ORIGIN: 'http://127.0.0.1:8787', ROOM_CONFIG: JSON.stringify(rooms), ...vars });
   await writeFile(`${directory}/wrangler.jsonc`, JSON.stringify(cfg));
   await writeFile(`${directory}/.dev.vars`, '');
   let child, log = ''; const sockets = [];

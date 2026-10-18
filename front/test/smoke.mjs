@@ -27,6 +27,8 @@ try {
   config.assets.directory = `${root}/front/dist`;
   config.vars = {
     AI_MODE: "mock",
+    BEHAVIOR_MODE: "autonomous",
+    RGB565_BIG_ENDIAN_DEVICES: "",
     ENABLE_LAB: "false",
     ALLOWED_ORIGIN: origin,
     SESSION_SECRET: "smoke-only-signing-key",

@@ -56,7 +56,7 @@ async function prepareConfig(local, key, session) {
     delete configuration.$schema; configuration.main = resolve('src/index.ts'); configuration.assets.directory = resolve('lab');
     await writeFile(`${directory}/wrangler.jsonc`, JSON.stringify(configuration), { mode: 0o600 });
     const vars = Object.fromEntries(['ROOM_CONFIG', 'SESSION_SECRET', 'ALLOWED_ORIGIN'].map(name => [name, local[name]]));
-    for (const name of ['STREAM_FPS','EVAL_INTERVAL_MS','NARRATION_INTERVAL_MS']) if (local[name]) vars[name] = local[name];
+    for (const name of ['STREAM_FPS','EVAL_INTERVAL_MS','NARRATION_INTERVAL_MS','BEHAVIOR_MODE']) if (local[name]) vars[name] = local[name];
     vars.AI_MODE = key ? 'decisions' : 'mock';
     if (key) Object.assign(vars, { OPENAI_API_KEY: key }, session);
     // dotenv preserves backslashes before quotes; JSON.stringify is not dotenv escaping.

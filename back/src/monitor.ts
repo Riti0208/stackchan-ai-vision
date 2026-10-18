@@ -2,7 +2,7 @@
 export const monitorHTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>StackChan 部屋モニター</title><style>
-:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10151e;color:#e4ebf5}body{max-width:1200px;margin:auto;padding:28px}h1{font-size:26px;margin:0 0 8px}h2{font-size:18px}p{line-height:1.7;color:#aab9cb}form{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:24px 0}label{display:grid;gap:6px;font-size:13px}input,button{font:inherit;border:1px solid #41516a;border-radius:7px;padding:10px;background:#182231;color:inherit}button{cursor:pointer;background:#214d74}button:disabled{opacity:.5;cursor:default}#state{color:#80d1bf}#devices{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:18px}.card{background:#182231;border:1px solid #304058;border-radius:12px;padding:20px;min-width:0}.card p{white-space:pre-wrap;overflow-wrap:anywhere}dl{display:grid;grid-template-columns:1fr 1fr;font-size:14px;gap:9px}dt{color:#aab9cb}dd{margin:0;text-align:right}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 4px;border-bottom:1px solid #304058}.scroll{overflow:auto}#events{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;max-height:350px;overflow:auto;background:#182231;padding:16px;border-radius:8px}small{color:#aab9cb}a{color:#80c8ff}.debug-json{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;font-size:12px;background:#10151e;padding:14px;border-radius:8px}#api-detail{margin:20px 0}#api-detail h3{font-size:15px}#api-detail-status{color:#aab9cb}
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10151e;color:#e4ebf5}body{max-width:1200px;margin:auto;padding:28px}h1{font-size:26px;margin:0 0 8px}h2{font-size:18px}p{line-height:1.7;color:#aab9cb}form{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:24px 0}label{display:grid;gap:6px;font-size:13px}input,button{font:inherit;border:1px solid #41516a;border-radius:7px;padding:10px;background:#182231;color:inherit}button{cursor:pointer;background:#214d74}button:disabled{opacity:.5;cursor:default}#state{color:#80d1bf}#devices{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:18px}.card{background:#182231;border:1px solid #304058;border-radius:12px;padding:20px;min-width:0}.card p{white-space:pre-wrap;overflow-wrap:anywhere}dl{display:grid;grid-template-columns:1fr 1fr;font-size:14px;gap:9px}dt{color:#aab9cb}dd{margin:0;text-align:right}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 4px;border-bottom:1px solid #304058}.scroll{overflow:auto}#events{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;max-height:350px;overflow:auto;background:#182231;padding:16px;border-radius:8px}small{color:#aab9cb}a{color:#80c8ff}.debug-json{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;font-size:12px;background:#10151e;padding:14px;border-radius:8px}#api-detail{margin:20px 0}#api-detail h3{font-size:15px}.head-buttons{display:grid;grid-template-columns:repeat(3,minmax(56px,1fr));gap:6px;max-width:300px}.head-controls{border-top:1px solid #304058;margin-top:18px;padding-top:12px}.head-feedback{min-height:1.7em}#api-detail-status{color:#aab9cb}
 </style><script src="/monitor/app.js" defer></script></head><body>
 <h1>StackChan 部屋モニター</h1><p>部屋ごとの接続・通信・感情とAPIの実行状況を観察します。</p>
 <form id="login"><label>ルーム<input id="room" value="main" required pattern="[a-z0-9](?:[a-z0-9_]|-){0,31}" maxlength="32"></label><label>部屋のトークン<input id="token" type="password" required autocomplete="off"></label><button id="connect">接続</button><button type="button" id="disconnect" disabled>切断</button></form>
@@ -73,9 +73,39 @@ function render(id) {
     ['API段階','件数','p50 / p95 ms','失敗'].forEach(v=>text('th',v,head));
     for(const [stage,label] of [['perception','観察・感情'],['intention','意向'],['narration','本音・会話']]) { const s=t.stages[stage], row=text('tr','',table); [label,s.count,num(s.p50_ms)+' / '+num(s.p95_ms),s.errors].forEach(v=>text('td',v,row)); }
   }
+  renderHead(id,card,root);
   text('p','本音: ' + (data.mind?.thought || '—'),root);
   text('p','建前: ' + (data.behavior?.display_text || '—'),root);
   text('small','感情: ' + (data.emotion ? Object.entries(data.emotion).map(([k,v])=>k+' '+Number(v).toFixed(2)).join(' / ') : '—'),root);
+}
+function headEnabled(card){return running&&card.connection==='接続済み'&&card.data.device_status?.online===true&&!card.headAuthFailed;}
+function updateHead(card){
+  if(!card.headButtons)return;
+  for(const button of card.headButtons)button.disabled=!headEnabled(card)||card.headBusy||Date.now()<(card.headCooldown||0);
+  const head=card.head;
+  card.headStatus.textContent=head?'最後の送信目標: pan '+head.pan.toFixed(2)+' / tilt '+head.tilt.toFixed(2)+' · 送信済み seq '+head.seq+' · '+(head.manual_until>Date.now()?'手動期限 '+new Date(head.manual_until).toLocaleTimeString()+'（残り '+Math.ceil((head.manual_until-Date.now())/1000)+'秒）':head.manual_until?'手動期限終了':'手動解除'):'この画面からの手動指令なし';
+}
+function renderHead(id,card,root){
+  const section=text('section','',root);section.className='head-controls';section.setAttribute('aria-label',id+' 首の手動操作');text('h3','首の手動操作',section);
+  text('small','左右・上下は0.2ずつ。操作後10秒は自動の首制御を抑止します。表示は指令目標で、実位置ではありません。',section);
+  const controls=text('div','',section);controls.className='head-buttons';card.headButtons=[];
+  for(const [action,label,name,row,column] of [['up','↑','首を上へ',1,2],['left','←','首を左へ',2,1],['center','中央','首を中央へ',2,2],['right','→','首を右へ',2,3],['down','↓','首を下へ',3,2],['resume','自動に戻す','首の自動制御に戻す',4,1]]){
+    const button=text('button',label,controls);button.type='button';button.setAttribute('aria-label',id+' '+name);button.setAttribute('data-head-action',action);button.style.gridRow=String(row);button.style.gridColumn=action==='resume'?'1 / 4':String(column);button.addEventListener('click',()=>headCommand(id,action));card.headButtons.push(button);
+  }
+  card.headStatus=text('p','',section);const feedback=text('p',card.headBusy?'首の指令を送信中…':card.headFeedback||'',section);feedback.className='head-feedback';feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');updateHead(card);
+}
+async function headCommand(id,action){
+  const card=cards.get(id);if(!card||!headEnabled(card)||card.headBusy||Date.now()<(card.headCooldown||0))return;
+  const ownGeneration=generation;card.headBusy=true;card.headFeedback='';card.headCooldown=Date.now()+500;render(id);
+  try{
+    const response=await fetch('/api/control/head?'+new URLSearchParams({room:currentRoom,device_id:id}),{method:'POST',signal:AbortSignal.timeout(8000),headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+    const result=await response.json().catch(()=>null);
+    if(generation!==ownGeneration||cards.get(id)!==card)return;
+    if(!response.ok){if(response.status===401)for(const item of cards.values()){item.headAuthFailed=true;updateHead(item);}throw new Error(response.status===401?'認証期限が切れました。再接続してください。':'HTTP '+response.status+' · '+(result?.error?.message||result?.error?.code||'送信失敗'));}
+    if(!result?.ok||result.device_id!==id||!Number.isFinite(result.pan)||Math.abs(result.pan)>1||!Number.isFinite(result.tilt)||Math.abs(result.tilt)>1||!Number.isSafeInteger(result.seq)||result.seq<0||!Number.isFinite(result.manual_until)||result.manual_until<0)throw new Error('応答形式を確認できませんでした');
+    card.head=result;card.headFeedback=action==='resume'?'自動制御への復帰を送信しました。':'首の指令を送信しました。';event(id,'首 '+action+' · 目標 pan '+result.pan+' / tilt '+result.tilt+' · seq '+result.seq);
+  }catch(error){if(generation===ownGeneration&&cards.get(id)===card)card.headFeedback='首の操作に失敗: '+error.message;}
+  finally{if(generation===ownGeneration&&cards.get(id)===card){card.headBusy=false;render(id);setTimeout(()=>{if(cards.get(id)===card)updateHead(card);},Math.max(0,card.headCooldown-Date.now()));}}
 }
 function send(ws,type,data={}) { if(ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type,timestamp:Date.now(),data})); }
 function stop(message='切断しました') { closeDebug();running=false;renderAPI(); generation++; clearInterval(healthTimer); clearInterval(listTimer); for(const entry of sockets.values()){clearTimeout(entry.timer); entry.ws.close();} sockets.clear(); for(const [id,card] of cards){card.connection='切断';render(id);} $('connect').disabled=false; $('disconnect').disabled=true; $('state').textContent=message; $('paid-control').hidden=true; }
@@ -125,7 +155,7 @@ function showPaid() {
   $('paid-seconds').disabled=paidBusy || budget.active; $('paid-calls').disabled=paidBusy || budget.active;
   $('paid-result').textContent=paidError || (!control?.key_configured?'OpenAI APIキーが未設定です。':budget.active?'実APIが有効です。残り '+Math.max(0,Math.ceil((budget.expires_at-Date.now())/1000))+' 秒 / '+budget.used_calls+' / '+budget.max_calls+' 回':'実APIは停止中です（'+(budget.reason||'停止')+'）。');
 }
-async function health(){const r=await fetch('/health',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error('ヘルスチェック失敗');const h=await r.json();lastHealth=h;$('health').textContent='AI: '+h.ai_mode+' / 実APIセッション: '+(h.paid_session.active?'有効':'停止')+' / 使用回数: '+h.paid_session.used_calls+' / '+h.paid_session.max_calls;showPaid();}
+async function health(){const r=await fetch('/health',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error('ヘルスチェック失敗');const h=await r.json();lastHealth=h;$('health').textContent='AI: '+h.ai_mode+' / 動作: '+(h.behavior_mode==='follow_person'?'人物追従':h.behavior_mode==='autonomous'?'自由判断':'不明')+' / 実APIセッション: '+(h.paid_session.active?'有効':'停止')+' / 使用回数: '+h.paid_session.used_calls+' / '+h.paid_session.max_calls;showPaid();}
 async function paidCommand(action) {
   if(paidBusy || !running)return;
   const seconds=Number($('paid-seconds').value), max_calls=Number($('paid-calls').value);
@@ -140,7 +170,7 @@ async function paidCommand(action) {
 }
 $('paid-start').addEventListener('click',()=>paidCommand('start'));
 $('paid-stop').addEventListener('click',()=>paidCommand('stop'));
-setInterval(()=>{if(running)showPaid();},1000);
+setInterval(()=>{if(running){showPaid();for(const card of cards.values())updateHead(card);}},1000);
 async function discover(ownGeneration){const r=await fetch('/api/rooms/'+encodeURIComponent(currentRoom)+'/devices',{cache:'no-store'});if(!r.ok)throw new Error('部屋が見つかりません');const list=await r.json();if(running&&generation===ownGeneration)for(const device of list.devices)attach(device.device_id,ownGeneration);}
 $('login').addEventListener('submit',async e=>{
   e.preventDefault();if(running)return;$('connect').disabled=true;const ownGeneration=++generation; currentRoom=$('room').value;
