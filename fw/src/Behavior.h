@@ -38,9 +38,9 @@ inline bool validCommand(const ActionCommand& c) {
 }
 class Behavior {
  public:
-  void idle(uint32_t now) {
+  void idle(uint32_t /*now*/) {
     gesture=false; targetPan=targetTilt=0; nextExpression=Expression::Neutral;
-    baseAction=Action::Idle; lastCommand=now;
+    baseAction=Action::Idle;
   }
   bool accept(const ActionCommand& c,uint32_t now) {
     if(!validCommand(c) || now-c.receivedAt>c.duration) return false;
@@ -48,7 +48,6 @@ class Behavior {
     targetTilt=c.action==Action::Idle?0:c.tilt*15;
     nextExpression=c.expression;
     baseAction=c.action==Action::Idle?Action::Idle:Action::LookAt;
-    lastCommand=now;
     // Preserve the active gesture; retain the newest tracking target for its end.
     if(!gesture && (c.action==Action::Nod || c.action==Action::Shake || c.action==Action::Happy)) {
       gesture=true; gestureAction=c.action; gestureExpression=c.expression;
@@ -63,7 +62,8 @@ class Behavior {
   void update(uint32_t now) {
     uint32_t elapsed=now-lastUpdate;lastUpdate=now;
     if(gesture && now-gestureAt>=gestureDuration) gesture=false;
-    if(!gesture && now-lastCommand>=3000) idle(now);
+    // Keep the last gaze between AI results. Explicit idle and transport loss
+    // still center the head; a quiet but connected server must not cause a snap back.
     float p=targetPan,t=targetTilt;
     if(gesture) {
       float phase=6.28318530718f*(now-gestureAt)/gestureDuration;
@@ -82,7 +82,7 @@ class Behavior {
   Expression expression() const {return gesture?gestureExpression:nextExpression;}
  private:
   float targetPan=0,targetTilt=0,gesturePan=0,gestureTilt=0;
-  uint32_t lastUpdate=0,lastCommand=0,gestureAt=0,gestureDuration=100;
+  uint32_t lastUpdate=0,gestureAt=0,gestureDuration=100;
   bool gesture=false;
   Action baseAction=Action::Idle,gestureAction=Action::Idle;
   Expression nextExpression=Expression::Neutral,gestureExpression=Expression::Neutral;

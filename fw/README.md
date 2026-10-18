@@ -121,3 +121,13 @@ these expressions do not copy a person's visible expression.
 
 FW reports `device_status.data.face_version: 2` to enable the new faces.
 The backend maps additional faces to supported faces until that notification.
+
+## Neutral gaze and tracking hold
+
+The physical pitch neutral is 40 degrees (previously 45), lowering the default
+gaze by 5 degrees. The servo stays within its calibrated 30–60 degree range,
+so downward travel from neutral is capped at 10 degrees; upward travel remains
+15 degrees. Serial HEAD logs report the actual clamped pitch.
+A connected device holds its most recent look_at position between AI results.
+It no longer recenters after three seconds without a new action. Explicit idle
+and Wi-Fi/WebSocket disconnection still center the head at the new neutral.

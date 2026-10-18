@@ -57,4 +57,17 @@ int main() {
   }
   assert(std::abs(b.pan-30.0f)<0.01f);
   assert(std::abs(b.tilt+15.0f)<0.01f);
+  // A healthy but slow AI must not cause the old 3-second recentering cycle.
+  Behavior held;
+  auto gaze=command(1,Action::LookAt,.5f,-.4f,250,0);
+  assert(held.accept(gaze,0));
+  for(uint32_t t=20;t<=10000;t+=20) held.update(t);
+  assert(held.action()==Action::LookAt);
+  assert(std::abs(held.pan-15.0f)<.01f && std::abs(held.tilt+6.0f)<.01f);
+  // Explicit idle is also the path used on a real Wi-Fi/WebSocket disconnect.
+  held.idle(10000);
+  for(uint32_t t=10020;t<=11000;t+=20) held.update(t);
+  assert(held.action()==Action::Idle);
+  assert(std::abs(held.pan)<.01f && std::abs(held.tilt)<.01f);
+
 }

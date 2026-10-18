@@ -14,7 +14,8 @@
 
 // Stage 2 was verified on hardware; stage 3 adds the authenticated WSS transport.
 constexpr int PAN_LIMIT = 300;    // 0.1 degree units
-constexpr int TILT_CENTER = 450;
+constexpr int TILT_CENTER = 400; // Default gaze: 5 degrees below the former 45-degree neutral.
+constexpr int PITCH_MIN = 300, PITCH_MAX = 600; // Preserve calibrated physical servo limits.
 constexpr int TILT_LIMIT = 150;
 constexpr int SERVO_SPEED = 350; // Official Motion scale: 0..1000
 bool cameraReady = false;
@@ -195,9 +196,10 @@ void moveHead(int requestedPan, int requestedTilt) {
   pan = constrain(requestedPan, -PAN_LIMIT, PAN_LIMIT);
   tilt = constrain(requestedTilt, -TILT_LIMIT, TILT_LIMIT);
   // Application: negative pan is left; official servo: positive yaw is left.
-  M5StackChan.Motion.move(-pan, TILT_CENTER + tilt, SERVO_SPEED);
+  const int pitch = constrain(TILT_CENTER + tilt, PITCH_MIN, PITCH_MAX);
+  M5StackChan.Motion.move(-pan, pitch, SERVO_SPEED);
   Serial.printf("HEAD pan=%.1f tilt=%.1f yaw=%d pitch=%d speed=%d\n",
-                pan / 10.0, tilt / 10.0, -pan, TILT_CENTER + tilt, SERVO_SPEED);
+                pan / 10.0, tilt / 10.0, -pan, pitch, SERVO_SPEED);
 }
 
 bool startCamera() {
@@ -257,6 +259,7 @@ void loop() {
   serviceWiFi(millis());
   uint32_t now = millis();
   if (stackchan_fw::takeWssSafetyReset()) {
+    Serial.println("HEAD center reason=wss_disconnected");
 #if FW_STAGE >= 6
     behavior.idle(now);
 #else
