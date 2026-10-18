@@ -187,7 +187,7 @@ FWシミュレーターへの指令受信まで確認済み。人物なしの観
 `wrangler.local.jsonc`はローカル確認用。`wrangler.jsonc`は公開用で、ラボのassetsを含めない。
 公開用はsecret未設定ならアプリAPI/WSを503で拒否する。
 
-1. Cloudflareの利用先アカウントを選び、`npx wrangler login`で認証する。
+1. Cloudflareの利用先アカウントを選び、`npx wrangler login`で認証する。`npx wrangler whoami`でメールとアカウントIDを確認し、公開時は`CLOUDFLARE_ACCOUNT_ID`を明示して別アカウントへの公開を防ぐ。
 2. `ROOM_CONFIG`にroomと本体を登録する。各本体のデバイストークンとroom制御トークンは別々の乱数にする。
 3. 以下を設定する（値はプロンプトへ入力する）。ローカル用の既知トークンを流用しない。
 
@@ -224,6 +224,40 @@ ROOM_CONFIGの形:
 
 5. `npm run build`で公開ビルドを確認し、公開する段階で`npm run deploy`を実行する。
 6. `/health`、FWの`--base`接続、FEログイン、2台同時中継、切断/再接続を公開URLで検証する。
+
+### 初回公開先とデプロイ用認証
+
+2026-10-18に専用Worker `stackchan-ai-vision` を手元のWranglerから初回公開した。
+公開先は `https://stackchan-ai-vision.k-i-wrd-setuna-g.workers.dev`、
+ヘルスチェックは `/health`。既定は `AI_MODE=mock`、実APIセッションは無効。
+FEは準備中のため、現時点の `/` は404。FEのビルドが用意できたら上記のassetsを追加し、
+同じWorkerへデプロイする。`ALLOWED_ORIGIN`はこの公開URLに設定済み。
+
+CI用にはアカウント所有APIトークンを使い、対象をこのWorkerだけに限定した
+`Individual Workers Editor`を付与する。既存WorkerへのBE・FE更新に使う。
+Workerの新規作成や他プロジェクトの操作は権限の対象に含めない。
+今回発行したトークンは2026-10-25まで有効。
+リポジトリのActions Secretsに`CLOUDFLARE_API_TOKEN`と`CLOUDFLARE_ACCOUNT_ID`を登録済み。
+期限前にCloudflare側で更新し、Actions Secretも差し替える。
+
+`.github/workflows/deploy-back.yml`はmainへのpushで実行する。型チェック、単体テスト、
+モックE2E、公開ビルドが成功したら既存Workerへデプロイし、`/health`と実APIの停止状態を確認する。
+Actions画面からmainを指定して手動実行も可能。同時デプロイは直列化する。
+FEのビルドはまだ含めていない。Cloudflare上の既存secretをそのまま維持し、
+OpenAIキーや部屋の認証情報をGitHubへコピーする必要はない。
+
+アカウント固有の設定・secret・デプロイトークンはGit対象外の
+`back/.wrangler/deploy/<account-id>/`に保存する。secretやトークンをコミットしない。
+通常の更新時は既存secretを保持し、`--secrets-file`はsecretを設定・変更するときだけ指定する。
+
+```sh
+# back/で、今回用の認証情報を読み込んで更新する
+set -a
+. .wrangler/deploy/<account-id>/deploy-token.env
+set +a
+npm run deploy
+unset CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+```
 
 ### 公開環境でDecisions＋Lunaを有効にする
 
