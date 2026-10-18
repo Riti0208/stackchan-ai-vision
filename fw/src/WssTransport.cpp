@@ -39,8 +39,12 @@ int pending=-1;
 portMUX_TYPE frameLock=portMUX_INITIALIZER_UNLOCKED;
 QueueHandle_t actionQueue=nullptr;
 std::atomic<uint32_t> sentFrames{0},droppedFrames{0},lastSendMs{0},measuredFpsMilli{0};
+std::atomic<uint32_t> receivedAcks{0},lastAckMs{0};
 std::atomic<Action> currentAction{Action::Idle};
 uint32_t nextFrameId=0,statusWindowAt=0,statusWindowFrames=0;
+struct AckSample { uint32_t frameId=0,sentAt=0; bool pending=false; };
+AckSample ackSamples[16];
+uint8_t nextAckSample=0;
 void clearPendingFrame() {
   portENTER_CRITICAL(&frameLock);
   if(pending>=0) {slots[pending].state=0;pending=-1;droppedFrames.fetch_add(1);}
@@ -61,7 +65,12 @@ void sendPendingFrame() {
     uint32_t started=millis();
     bool ok=socket.sendBIN(frame.data,frame.length);
     lastSendMs.store(millis()-started);
-    if(ok) {++nextFrameId;sentFrames.fetch_add(1);}
+    if(ok) {
+      const uint32_t id=nextFrameId++;
+      ackSamples[nextAckSample]={id,started,true};
+      nextAckSample=(nextAckSample+1)%16;
+      sentFrames.fetch_add(1);
+    }
     else {droppedFrames.fetch_add(1);socket.disconnect();}
   }
   portENTER_CRITICAL(&frameLock);frame.state=0;portEXIT_CRITICAL(&frameLock);
@@ -94,6 +103,7 @@ void onSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     uint32_t count = connections.fetch_add(1) + 1;
     connected.store(true);
 #if FW_STAGE >= 6
+    for(auto& sample:ackSamples) sample.pending=false;
     clearPendingFrame();
     if(actionQueue) xQueueReset(actionQueue);
     statusWindowAt=millis();statusWindowFrames=sentFrames.load();
@@ -127,6 +137,20 @@ void onSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       }
       sessionReady.store(true);
       Serial.println("WSS session OK protocol=2 role=device format=rgb565le-v2 size=160x120");
+    } else if (strcmp(messageType, "frame_received") == 0) {
+#if FW_STAGE >= 6
+      auto data=doc["data"];
+      const char* stream=data["stream_id"] | "";
+      if(stream[0]!='\0' && data["frame_id"].is<uint32_t>()) {
+        const uint32_t id=data["frame_id"].as<uint32_t>();
+        for(auto& sample:ackSamples) if(sample.pending && sample.frameId==id) {
+          lastAckMs.store(millis()-sample.sentAt);
+          receivedAcks.fetch_add(1);
+          sample.pending=false;
+          break;
+        }
+      }
+#endif
     } else if (strcmp(messageType, "action") == 0) {
 #if FW_STAGE >= 6
       auto data=doc["data"];
@@ -313,7 +337,7 @@ void publishFrame(FrameLease& lease,size_t packetLength,uint32_t generation,uint
 }
 bool receiveAction(ActionCommand& command) {return actionQueue && xQueueReceive(actionQueue,&command,0)==pdPASS;}
 void reportAction(Action action) {currentAction.store(action);}
-UploadMetrics uploadMetrics() {return {sentFrames.load(),droppedFrames.load(),lastSendMs.load(),measuredFpsMilli.load()};}
+UploadMetrics uploadMetrics() {return {sentFrames.load(),droppedFrames.load(),lastSendMs.load(),measuredFpsMilli.load(),receivedAcks.load(),lastAckMs.load()};}
 #endif
 } // namespace stackchan_fw
 #endif

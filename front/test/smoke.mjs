@@ -292,6 +292,21 @@ try {
     () =>
       document.querySelector('[role="status"]')?.textContent === "CONNECTED",
   );
+  const socketsBeforeVideoRecovery = sockets;
+  clearInterval(sim.frameTimer);
+  await page.waitForEvent("websocket", { timeout: 20000 });
+  assert.equal(
+    sockets,
+    socketsBeforeVideoRecovery + 1,
+    "a stalled video reconnects its viewer once",
+  );
+  await sleep(6000);
+  assert.equal(sockets, socketsBeforeVideoRecovery + 1, "stalled video does not create a reconnect loop");
+  sim.frameTimer = setInterval(() => sim.sendFrame(), 1000 / sim.fps);
+  await page.waitForFunction(
+    () => document.querySelector(".live-badge")?.textContent === "LIVE",
+    { timeout: 5000 },
+  );
   for (
     let n = 0;
     n < 60 &&

@@ -143,9 +143,13 @@ export default function App() {
             )}
           </div>
         )}
-        {s.mode === "decisions" && s.paidActive === false && (
-          <div className="notice">
-            AIの実行セッションは停止中です。映像は引き続き受信できます。
+        {connected && s.paidActive === false && s.mode !== null && (
+          <div className="notice" role="status">
+            {s.paidReason === "call_limit"
+              ? `AI実APIは呼び出し上限に達して停止しています${s.paidCallsUsed !== null && s.paidCallsMax !== null ? `（${s.paidCallsUsed}/${s.paidCallsMax}回）` : ""}。映像接続とは別の状態です。`
+              : s.mode === "mock"
+                ? "AIは模擬モードで動作中です。実APIセッションを確認してください。映像接続とは別の状態です。"
+                : "AIの実行セッションは停止中です。映像は引き続き受信できます。"}
           </div>
         )}
         <div className="dashboard">

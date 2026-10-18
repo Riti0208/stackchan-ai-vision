@@ -16,7 +16,10 @@ actions, moves the neck within small limits, and draws the selected expression.
   earlier connection are discarded. The target is capped at 60 fps; actual
   delivery may be lower when the camera or network cannot keep up.
 - Sends `device_status` every five seconds with measured upload FPS, Wi-Fi RSSI,
-  and current action. Battery is `null` because the camera owns the shared I2C bus.
+  and current action. The serial `send_ms` measures the WebSocket write call;
+  `ack_ms` measures time from starting that write until the backend confirms
+  receipt, and `rx_ack` counts confirmed frames. Battery is `null` because the
+  camera owns the shared I2C bus.
 - Accepts newer action sequence numbers only. Pan is limited to ±30 degrees,
   tilt to ±15 degrees around neutral; tracking and gestures use a faster,
   responsive movement curve while staying inside those limits.

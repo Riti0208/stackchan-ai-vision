@@ -15,7 +15,7 @@ bool takeWssSafetyReset();
 void requestWssReconnect();
 #if FW_STAGE >= 6
 struct FrameLease { uint8_t* data=nullptr; size_t capacity=0; int slot=-1; };
-struct UploadMetrics { uint32_t sent=0,dropped=0,lastSendMs=0,fpsMilli=0; };
+struct UploadMetrics { uint32_t sent=0,dropped=0,lastSendMs=0,fpsMilli=0,receivedAcks=0,lastAckMs=0; };
 FrameLease acquireFrame();
 void publishFrame(FrameLease& lease,size_t packetLength,uint32_t generation,uint32_t capturedAt);
 void discardFrame(FrameLease& lease);

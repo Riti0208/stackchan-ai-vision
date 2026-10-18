@@ -22,6 +22,9 @@ export type RobotState = {
   notice: string;
   mode: "mock" | "decisions" | null;
   paidActive: boolean | null;
+  paidReason: string | null;
+  paidCallsUsed: number | null;
+  paidCallsMax: number | null;
 };
 const initial = (): RobotState => ({
   connection: "connecting",
@@ -42,6 +45,9 @@ const initial = (): RobotState => ({
   notice: "",
   mode: null,
   paidActive: null,
+  paidReason: null,
+  paidCallsUsed: null,
+  paidCallsMax: null,
 });
 const ident = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 export const query = new URLSearchParams(location.search);
@@ -65,6 +71,7 @@ export class RobotConnection {
   private decoding = false;
   private detecting = false;
   private detectAt = 0;
+  private videoRecoveryAttempted = false;
   private pending: {
     bytes: ArrayBuffer;
     frame: number;
@@ -173,7 +180,23 @@ export class RobotConnection {
         this.patch({
           mode: h.ai_mode,
           paidActive: h.paid_session?.active ?? null,
+          paidReason: h.paid_session?.reason ?? null,
+          paidCallsUsed: Number.isFinite(h.paid_session?.used_calls) ? h.paid_session.used_calls : null,
+          paidCallsMax: Number.isFinite(h.paid_session?.max_calls) ? h.paid_session.max_calls : null,
         });
+      if (
+        !this.stopped &&
+        document.visibilityState === "visible" &&
+        this.state.connection === "connected" &&
+        this.state.online &&
+        this.state.lastFrame > 0 &&
+        Date.now() - this.state.lastFrame >= 10000 &&
+        !this.videoRecoveryAttempted
+      ) {
+        this.videoRecoveryAttempted = true;
+        this.connect();
+        this.patch({ notice: "映像が止まったため、ビューアを再接続しています。" });
+      }
     } catch {
       /* WS state is authoritative for connectivity. */
     }
@@ -417,6 +440,7 @@ export class RobotConnection {
       bytes.byteLength > 256 * 1024
     )
       return;
+    this.videoRecoveryAttempted = false;
     const b = new Uint8Array(bytes);
     if (
       b[4] !== 255 ||
@@ -426,11 +450,6 @@ export class RobotConnection {
     )
       return;
     const frame = new DataView(bytes).getUint32(0, false);
-    this.send({
-      type: "frame_ack",
-      timestamp: Date.now(),
-      data: { stream_id: this.state.stream, frame_id: frame },
-    });
     this.pending = {
       bytes,
       frame,
@@ -468,9 +487,19 @@ export class RobotConnection {
           continue;
         }
         const ctx = this.canvas.getContext("2d");
+        if (!ctx) {
+          bitmap.close();
+          this.patch({ notice: "映像キャンバスを初期化できませんでした。" });
+          continue;
+        }
         this.canvas.width = bitmap.width;
         this.canvas.height = bitmap.height;
-        ctx?.drawImage(bitmap, 0, 0);
+        ctx.drawImage(bitmap, 0, 0);
+        this.send({
+          type: "frame_ack",
+          timestamp: Date.now(),
+          data: { stream_id: item.stream, frame_id: item.frame },
+        });
         this.displayed = item.key;
         this.patch({
           frame: item.frame,
