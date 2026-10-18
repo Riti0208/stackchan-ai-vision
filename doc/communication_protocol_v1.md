@@ -1,13 +1,14 @@
-# 通信仕様 v1 — FE / BE / FW
+# 通信仕様 v1.6 — FE / BE / FW
 
-更新日: 2026-10-17。対象: 2026-10-18のハッカソン。
+更新日: 2026-10-18。対象: 2026-10-18のハッカソン。
 
-本書は実装用の通信契約。BE・認証・デプロイが実装済みであることを示すものではない。
+本書は実装用の通信契約。ローカルBE・FWシミュレーターは[起動手順](../back/README.md)を参照。
+公開BE・実機・本番FEとの接続確認は別途行う。
 本番DOMAINと接続用の秘密情報は別途チームへ共有する。
 
 ## 1. 設計案からの変更と固定事項
 
-[設計案 v1.0](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
+[設計書 v1.6](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
 以下は設計案の追加・変更であり、通信については本書を優先する。
 
 - **同一roomに複数のスタックチャンが参加可能**。各本体はroom内で一意な`device_id`を持つ。
@@ -15,12 +16,16 @@
 - 制御ブラウザは**各デバイスにつき1接続**。閲覧ブラウザは複数接続可能。
 - `session` / `stream` / `error`イベントと、デバイス一覧・制御ログインAPIを追加する。
 - `detection.data.stream_id`と`decision.data.stream_id`を追加し、本体再接続前の結果を区別する。
+- `frame_ack`を追加し、遅い閲覧者へ画像を無制限に送らない。
+- 本音の`mind`、建前の`behavior`、room会話の`dialogue` / `dialogue_history`を追加する。
+- 追加イベントは後方互換の拡張とし、sessionのprotocol_versionは1を維持する。
 
 roomはグループ、device_idは本体の識別子。例: `main`に`stackchan-01`と`stackchan-02`。
 両識別子は`^[a-z0-9][a-z0-9_-]{0,31}$`。URLの両パラメーターは必須。
 BEが許可した組み合わせのみ接続可能。URLから新しいroomやデバイスを自動作成しない。
 
-同じroomでも、画像・検出・感情・AI判断・動作番号・制御権をデバイス間で共有しない。
+同じroomでも、画像・検出・感情・AI判断・動作番号・制御権をデバイス間で分離する。
+公開会話と外に出た動作のみ個体間で共有し、他個体の本音・感情・親しみは意思決定の入力に含めない。
 BE内部の配置方法は自由だが、外部契約はこの分離を保証する。
 
 ## 2. 接続先と認証
@@ -83,6 +88,7 @@ FEは本体を選んで接続する。複数本体を同時表示するなら、
 ## 3. メッセージと初期配信
 
 WSの1メッセージは、JSONテキスト1個または画像バイナリ1個。JSONはUTF-8。
+通常dataはobjectだが、BE→FEのbehaviorに限り未発行状態をnullで示す。
 
 ```json
 {"type":"message_type","timestamp":1792300000000,"data":{}}
@@ -105,8 +111,21 @@ BEの期限・順序判定にはBE受信時刻と内部の受信順を使う。�
 | `stream` | BE → FE | カメラ接続世代 |
 | `error` | BE → FE / FW | 通信契約違反等 |
 | `heartbeat` | 制御FE → BE → 制御FE | 制御接続の生存確認 |
+| `frame_ack` | FE → BE | 画像受信確認。viewer/controllerともに送信 |
+| `human_action` | BE → 対象本体のFE | 2回の画像評価から確認した新しい見た目の変化 |
+| `telemetry` | BE → 対象本体のFE | API段階別RTT・呼び出し間隔・映像受信・ACK往復・処理結果の集計 |
+| `telemetry_request` | FE → BE | 計測の詳細標本を要求。viewer/controllerのみ、1秒に1回まで |
+| `telemetry_snapshot` | BE → 要求したFE | 集計値に詳細標本samplesを追加した一回の応答 |
+| `frame_received` | BE → FW | JPEGの受信確認。認識や描画の完了通知ではない |
+| `action_ack` | FW → BE | 指令の受信・受け付け可否。モーター動作完了ではない |
+| `mind` | BE → 対象本体のFE | 本音・性格・意向・親しみ |
+| `memory` | BE → 対象本体のFE | 初回参加日時・保存日時・体験件数 |
+| `behavior` | BE → 対象本体のFE | 実際に発行したactionと建前 |
+| `dialogue` | BE → 同じroomの全FE | 公開した言葉。内部で宛先のinboxにも配送 |
+| `dialogue_history` | BE → FE | 初期配信用のroom会話履歴（最大20件） |
 
 viewer接続後、BEは`session` → `stream` → 現在の`emotion` → 現在の`device_status`の順に送る。
+続いて現在の`mind` → `behavior`（未発行ならnull）→ `dialogue_history` → `memory` → `telemetry`を送る。
 初期配信後にライブ画像・更新イベントを流す。過去の判断ログや画像履歴は再送しない。
 FW接続後は最初に`session`を送る。各接続の対象とroleは接続中に変更しない。
 
@@ -132,7 +151,15 @@ FWはフレームごとにIDを1増やす（uint32循環）。再接続時は0�
 BEはデバイスごとに最新画像だけを推論用メモリーに保持し、画像を永続保存しない。
 FW・BE・FEはアプリ内の未処理画像を積み上げず最新を優先する。
 既に送信したWSメッセージは取り消せないため、配送済み古フレームの到着はあり得る。
-BEは遅い閲覧接続を1013で閉じて再接続させ、他の本体や閲覧者を待たせない。
+FEは画像を受信・消費（描画待ちの旧画像を破棄する場合も含む）するごとに、同じstream/frame_idで受信確認を返す。
+BEは確認されていない画像が4枚ある接続へ次の画像を送らず、1013で閉じる。他の閲覧者は待たせない。
+確認は画像配送のフロー制御用であり、顔検出の完了確認ではない。検出は別途非同期に送る。
+
+```json
+{"type":"frame_ack","timestamp":1792300000000,"data":{"stream_id":"opaque-stream-id","frame_id":120}}
+```
+
+同じstreamのframe_ackはそのIDまでの受信確認を兼ねる。未知ID・前streamの確認は無視する。
 
 本体接続ごとにBEが一意な`stream_id`を発行する。viewer初期配信と本体の接続・切断時に通知する。
 
@@ -164,18 +191,19 @@ JPEGヘッダーのIDは**そのソケットの現在のstream内**でのみ有�
 | イベント | dataのフィールド |
 |---|---|
 | `emotion` | `happiness`, `curiosity`, `excitement`, `shyness`, `trust`: 各number 0〜1 |
-| `decision` | `stream_id`: string、`frame_id`: uint32、`observations`: 下記4項目、`selected_action`: Action、`confidence`: number 0〜1 |
+| `decision` | `stream_id`: string、`frame_id`: uint32、`observations`: 下記8項目と表情分類、`selected_action`: Action、`confidence`: number 0〜1 |
 | `action` | `seq`: 正整数、`action`: Action、`pan`, `tilt`: number -1〜1、`expression`: Expression、`duration_ms`: 整数100〜3000 |
 | `device_status` | `online`: boolean、`fps`: number 0以上、`wifi_rssi`: numberまたはnull、`battery`: number 0〜100またはnull、`current_action`: Action |
 
 - Action = `idle | look_at | nod | shake | happy`。
 - Expression = `neutral | happy | sad | surprised | thinking`。
-- observations = `person_present`, `smiling`, `looking_at_robot`, `waving`: 各number 0〜1。
-- 初期emotionは順に`0.5, 0.5, 0.2, 0.2, 0.5`。本体ごとに独立する。
+- observationsは8つのnumber 0〜1: `person_present`, `smiling`, `looking_at_robot`, `waving`, `frowning`, `eyes_wide`, `mouth_open`, `tears_visible`。
+  加えて`apparent_expression: {label, confidence}`。labelはsmiling / sad_looking / tense_looking / surprised_looking / neutral / unclear、confidenceは0〜1。
+- 初回emotionは性格別の初期値（設計書の表）を使用する。再接続では保存値を復元し、本体ごとに独立する。
 - `decision`はBEが整形するアプリイベント。外部AI APIの生レスポンスにFE/FWを依存させない。
 
 ```json
-{"type":"decision","timestamp":1792300000000,"data":{"stream_id":"opaque-stream-id","frame_id":120,"observations":{"person_present":0.98,"smiling":0.91,"looking_at_robot":0.74,"waving":0.12},"selected_action":"happy","confidence":0.87}}
+{"type":"decision","timestamp":1792300000000,"data":{"stream_id":"opaque-stream-id","frame_id":120,"observations":{"person_present":0.98,"smiling":0.91,"looking_at_robot":0.74,"waving":0.12,"frowning":0.05,"eyes_wide":0.1,"mouth_open":0.05,"tears_visible":0.01,"apparent_expression":{"label":"smiling","confidence":0.9}},"selected_action":"happy","confidence":0.87,"mind_revision":1,"intent":"greet"}}
 ```
 
 ```json
@@ -187,10 +215,14 @@ panは負が左・正が右、tiltは負が下・正が上。FWが物理角度�
 符号は元のカメラ画像で見た追跡方向と実機を合わせて校正する。
 BEは顔の中心と現在の指令位置から次の絶対目標を計算する。追跡ゲインは実機で調整する。
 
+`decision`には`mind_revision`（非負整数）と`intent`（後述）を追加する。
+selected_actionはその判断の表現であり、送信完了・実行完了を保証しない。実際の指令発行はbehaviorで確認する。
+
 seqは各FW接続で1から開始。FWは接続成功時に最終seqをリセットし、古い・重複seqを無視する。
 nod/shake/happyはduration_ms内で完了するジェスチャーで、pan/tiltを基準位置とする。
 BEはジェスチャー中に次の追跡・ジェスチャー指令を送らない。FWもジェスチャーを優先する。
-終了後は新しい検出結果から追跡を再開する。検出が3秒途絶した場合は追跡を止めidleへ移る。
+**intent=observeのときだけ**新しい検出結果で追跡する。avert/greet/engage/restでは顔位置で指令を上書きしない。
+追跡中に検出が3秒途絶した場合は追跡を止めidleへ移る。
 FWは通信断でジェスチャーを止め、安全な待機状態へ移る。可動範囲・速度制限はFWの責任。
 
 FWは接続直後と以後5秒ごとにdevice_statusを送る。未取得値はnull、未計測FPSは0。
@@ -202,10 +234,229 @@ BEが15秒間device_statusを受信しなければ接続を閉じる（4000）�
 AI判断は各本体で約2秒周期、同じ本体では多重実行しない。推論開始時に画像とstreamを固定する。
 完了時にstreamが変わった、切断済み、画像受信から10秒超、最後に適用した判断以下の受信順なら破棄する。
 推論中に次の画像が届いたことだけを理由に結果を破棄しない。
-AI失敗時は感情を維持し、画像・軽量な顔追跡は継続する。全段成功後に感情と判断を反映する。
+Decisions失敗時は感情を維持し、画像・軽量な顔追跡は継続する。
+Lunaの文章生成のみ失敗した場合はテンプレートへ切り替え、generation.provider=fallbackを付けて感情と判断を反映する。
 FEは受信したdecisionを各本体につき直近20件まで保持する。再接続後の履歴復元は対象外。
 
-## 6. エラー・切断・再接続
+## 6. 本音・建前・同じroomの会話
+
+BEが全イベントの発行元。FE/FWからこれらを注入することは禁止し、1008で閉じる。
+本音は観客向けのロボットの演出的な内面であり、モデルの内部思考過程ではない。
+一般viewerも対象本体のmindを閲覧できる。ロボットの意思決定には自分のmindのみ渡す。
+
+### mind: 本音と意向
+
+```json
+{"type":"mind","timestamp":1792300000000,"data":{"device_id":"stackchan-02","revision":2,"personality":"shy","intent":"engage","target":{"kind":"device","device_id":"stackchan-01"},"thought":"声をかけてくれて、すごくうれしい。でも照れる……。","generation":{"provider":"openai","model":"gpt-6-luna","reason":null},"relationships":{"stackchan-01":0.6},"cause":{"kind":"dialogue","message_id":"greeting-id"},"valid_until":1792300006000}}
+```
+
+| 項目 | 定義 |
+|---|---|
+| device_id | このWSで閲覧している本体 |
+| revision | 非負整数。本体接続ごとに0から開始、意向変更時に増加 |
+| personality | curious / shy / cheerful / calm / cautious / playful |
+| intent | observe / greet / engage / avert / rest / acknowledge_person / delight |
+| target.kind | person / device / none。deviceの場合のみtarget.device_idがstring、それ以外はnull |
+| thought | ロボットの内面を示す短文、1〜160文字。通常Luna生成、mock/失敗時は模擬文・テンプレート。人間の感情を断定しない |
+| generation | null または下記の生成元オブジェクト。初期・切断時はnull |
+| relationships | 相手device_id→親しみ0〜1。未登録の基準は0.5 |
+| cause | observation / dialogue / human_action。会話の場合message_idは受信会話id、それ以外はnull。人間イベント関連ではevent_idを追加 |
+| valid_until | BE基準のUnixミリ秒。通常6秒の意向維持。新しい人間アクション、受信会話、curious / cheerful / playfulのobserve中の新しい相手への挨拶で割り込める |
+
+emotionは別イベントで配信する。mindをFWや相手ロボットに渡さない。
+親しみのみ変わり意向を維持する場合、同じrevisionでmindを再送できる。
+
+generationの形:
+
+```json
+{"provider":"openai","model":"gpt-6-luna","reason":null}
+```
+
+providerはopenai / mock / fallback。modelはopenaiだけgpt-6-luna、それ以外はnull。
+reasonは通常null。fallbackの場合はapi_error（失敗・タイムアウト・不正応答・refusal）、
+rate_limit（429）、cooldown（再試行待ち・最低生成間隔内）。本音と、同じ判断から発行する会話文の出所を示す。
+同じ意向の文を再利用した場合は元のgenerationを維持する。
+FEはfallbackをモデル生成と表示しない。behavior.display_textは常にBEの動作説明であり、生成台詞ではない。
+
+decision.aiはprovider(openai/mock)、model(gpt-6-luna/null)、requests、input_tokens、output_tokens、latency_ms、request_ids、callsを持つ。
+requestsと合計値はこの判断中に成功して検証まで完了した呼び出しのみ。失敗したAPIの課金額まで表すものではない。
+callsの各項目はendpoint(decisions/responses)、model、request_id(string/null)、input_tokens、output_tokens、latency_ms。
+意向・文章の再利用時はresponsesの呼び出しが含まれない。mockはcalls=[]、各合計0。
+APIキー・プロンプト・APIの生レスポンスはイベントに含めない。
+
+v1.6のdecisionにはaffectも付く。形は次のとおり。
+
+```json
+{"provider":"openai","model":"gpt-6-luna","previous_emotion":{"happiness":0.5,"curiosity":0.5,"excitement":0.2,"shyness":0.8,"trust":0.5},"confidence":{"happiness":0.8,"curiosity":0.9,"excitement":0.8,"shyness":0.7,"trust":0.6},"history_size":3,"received_message_is_new":true}
+```
+
+providerはopenai / mock、modelはgpt-6-luna / null。previous_emotionは今回の更新前、confidenceは5感情の各scoreの確信度0〜1。
+history_sizeは判断に渡した自分の最近の体験数0〜6。received_message_is_newは受信会話をまだ体験済みにしていない場合true。
+感情はDecisionsの5段階score（0〜4の加重平均）を4で割った値。BEの固定加算・減衰を重ねない。
+感情全5項目の検証後、対象streamや会話の有効性を再検証して既存emotionイベントで配信する。
+顔の見え方とロボット自身の感情は別々に表示する。人物未検出/不確かなら表情を人間の内心として表示しない。
+
+
+### behavior: 建前と発行した動作
+
+```json
+{"type":"behavior","timestamp":1792300000000,"data":{"device_id":"stackchan-02","mind_revision":2,"display_text":"うれしさを隠して、控えめにうなずく","command":{"seq":3,"action":"nod","pan":0,"tilt":0,"expression":"neutral","duration_ms":900},"issued_at":1792300000000}}
+```
+
+commandはFWへ発行したaction.dataの同一コピー。display_textは観客向けの建前の説明。
+mind_revisionで本音と紐付ける。FWの実行完了を示すACKではない。
+本体未接続・切断・新streamで未発行ならdataはnull。FEは前の動作を現在の動作として再表示しない。
+意向維持中のdecisionは新しいbehavior/actionを必ずしも伴わない。observe中の追跡は同じmind_revisionで指令を更新できる。
+
+### dialogue: 公開した言葉
+
+```json
+{"type":"dialogue","timestamp":1792300000000,"data":{"id":"greeting-id","room":"main","from_device_id":"stackchan-01","to_device_id":"stackchan-02","from_stream_id":"stream-a","to_stream_id":"stream-b","reply_to":null,"speech_act":"greet","text":"お客さんが来たよ。一緒に見てみよう！","created_at":1792300000000,"expires_at":1792300012000}}
+```
+
+```json
+{"type":"dialogue","timestamp":1792300002000,"data":{"id":"reply-id","room":"main","from_device_id":"stackchan-02","to_device_id":"stackchan-01","from_stream_id":"stream-b","to_stream_id":"stream-a","reply_to":"greeting-id","speech_act":"acknowledge","text":"う、うん。一緒に見よう。","created_at":1792300002000,"expires_at":1792300014000}}
+```
+
+全項目必須。idはBEが発行する不透明で一意なstring。実装ではUUID。
+reply_toは挨拶ならnull、返答なら元のgreetのid。speech_actはgreet / acknowledge。
+created_at/expires_atは整数のUnixミリ秒。expires_atは作成から12秒後。
+roomと両本体は同じ登録済みroomに限り、送受信者がオンラインでstream一致の場合だけ配送する。
+room全体のFEに同じイベントを送る。FEは複数WS・履歴配信による重複をidで除去する。
+他roomのFEには配信しない。dialogueにthought / emotion / relationshipsを含めない。
+
+発言はroomで最低2秒間隔。相手streamごとにgreetは1回。
+受信greetに対してacknowledgeを1回返せる。acknowledgeにはlistenという内部choiceで動作のみ応じ、追加発言を作らない。
+内部choiceのlisten/replyは外部intentではengageに対応する。音声・TTS・FW上の台詞表示はMVPに含めない。
+宛先inboxは最大10件、個体の公開会話履歴は最大10件。
+期限切れ、送信元/宛先の切断・新streamで未処理会話を破棄する。
+
+### dialogue_history: 表示用の過去の会話
+
+```json
+{"type":"dialogue_history","timestamp":1792300000000,"data":{"messages":[]}}
+```
+
+messagesはdialogue.dataの配列、古い順、最大20件。空配列も送る。
+期限切れの発言も履歴として表示できるが、inboxへ再投入しない。
+遅れて参加したviewerも会話の流れを読める。DO再起動で消える。
+
+### human_actionとdecision.reaction
+
+BEが画像評価の変化から検出する通知。FW/FEから送信できない。
+
+```json
+{"type":"human_action","timestamp":1792300000000,"data":{"id":"human-event-id","stream_id":"opaque-stream-id","frame_id":120,"observed_at":1792300000000,"expires_at":1792300010000,"changes":["hand_raised","smile_started"]}}
+```
+
+changesはperson_appeared / person_left / hand_raised / smile_started / frown_started /
+eyes_widened / mouth_opened / tears_appeared / looked_at_robotの配列。
+新しい順序の画像で高値0.8以上2回→開始、低値0.3以下2回→解除。中間値では確定状態を変えず確認回数をリセットする。
+人物が0.8以上のときだけ新しい表情/手上げを確定する。人物が0.3以下なら各特徴の解除判定へ進む。
+観察間隔が6秒超なら連続確認をやり直す。同じ開始イベントは成立中に繰り返さず、解除→再成立かつ6秒経過で再通知できる。
+最大の顔の見た目の比較であり、人物同定や実際の手振り運動の検証は行わない。
+FEはidで重複排除し、これを「必ず本体が動作する」という通知として扱わない。
+
+感情・意向が確定したdecisionには、次の追加フィールドを含める。
+
+```json
+{"human_action":{"id":"human-event-id","stream_id":"opaque-stream-id","frame_id":120,"observed_at":1792300000000,"expires_at":1792300010000,"changes":["hand_raised"]},"reaction":{"trigger":"human_action","intent_reassessed":true,"command_issued":true,"selected_choice":"acknowledge_person","event_id":"human-event-id"}}
+```
+
+human_actionは今回消費したイベント、なければnull。reaction.triggerはhuman_action / dialogue / companion / initial / periodic / held。
+intent_reassessedは意向維持を解いて選び直したか、command_issuedは今回新しいFW指令を発行したか。
+同じchoiceが続く定期再評価ではcommand_issued=false。selected_choiceは今回選んだchoice。
+acknowledge_person / delightのジェスチャーは新しい人間イベントがある場合に限って再発行し、モデルが両者を選び替えても反復しない。
+selected_actionは新指令を発行しない場合、直近の実指令のActionを示す。event_idは対象の人間アクションid、なければnull。
+mind.causeは人間イベントによる更新ではkind=human_action、message_id=null、event_idを追加する。
+会話と同時に処理した場合はkind=dialogueを優先し、event_idは関連する人間イベントのidを保持する。
+acknowledge_person / delightはtarget.kind=person、public_text=null。FWのAction/Expression語彙は増やさない。
+イベントの有効期限は10秒、未処理最大4件。期限切れ・再接続前のイベントに対する生成結果は破棄する。
+確定した観察状態は個体の記憶へ保存するが、未処理イベントや確認途中の回数は再接続へ引き継がない。
+
+actionとの照合は従来どおりbehavior.commandとseqを使う。人間イベントがあっても、回答不正や
+動作中・API失敗などで反応がまだ確定していない場合は、human_action通知だけが届くことがある。
+
+### 個体の性格設定
+
+ROOM_CONFIGの各roomには任意のprofilesを追加できる。
+
+```json
+{"main":{"control_token":"<room-token>","devices":{"stackchan-01":"<device-01-token>","stackchan-02":"<device-02-token>"},"profiles":{"stackchan-01":"curious","stackchan-02":"shy"}}}
+```
+
+profilesは未保存の個体の初回指定。未設定なら認証済みFWの初回接続時に6種類からランダムに選ぶ。
+viewer接続・一覧取得だけでは割り当てない。保存済みの性格はprofilesより優先し、再接続でも再抽選しない。
+同じroom＋device_idなら性格・感情・直前の本音・親しみ・最近6件の体験と累計件数・
+自分に関係する公開会話10件・処理済み会話id100件をDOストレージから引き継ぐ。
+部屋変更・device_id変更・保存領域削除は別個体として扱う。管理用の記憶削除APIは追加しない。
+同じDO保存領域を使うWorker再起動・再デプロイでも復元する。JPEG、検出、actionは永続化しない。
+再接続時の意向はobserve、targetはperson、有効期限は0に戻し、新しい観察から更新する。
+前回の本音と生成元は保持するが、古い台詞・動作・未処理メッセージは再送しない。
+
+### memory
+
+初期配信および保存完了時に対象個体のFEへ送る。FWや他個体の判断には送らない。
+
+```json
+{"type":"memory","timestamp":1792300000000,"data":{"scope":"room_device","first_join_at":1792299000000,"last_saved_at":1792300000000,"experience_count":4,"total_experiences":12}}
+```
+
+first_join_at / last_saved_atはBE基準のUnixミリ秒。FWの初回参加前は両方null。
+experience_countは感情判断に渡す直近の体験件数0〜6、total_experiencesは記録した体験の累計。
+累計件数は全履歴を保存しているという意味ではない。
+
+### telemetryとペース設定
+
+初期配信、判断処理の完了時、接続中は最長約5秒ごとに対象個体のFEへtelemetryの集計値を送る。
+通常配信にはsamplesを含めず、映像の帯域を圧迫しない。詳細標本はtelemetry_request.data={}へのtelemetry_snapshotだけに含める。
+要求はviewer/controllerのみ1秒に1回まで。超過時はtelemetry_rate_limitedエラーを返す。
+APIの観察・感情(perception)、意向(intention)、本音・会話(narration)を別のstageで記録する。
+
+- samples.api: 直近120試行。stage、endpoint、model、run_id、stream_id、started_at / completed_at、rtt_ms、headers_ms、status、request_id、outcome、input_tokens / output_tokens。
+- rtt_ms: BEで呼び出してから、本文の受信・JSON解析・アダプター検証を終えるまで。performance.nowによる経過時間。headers_msは応答ヘッダー受信まで。
+- outcome: success / http_error / timeout / network_error / invalid_response / configuration_error。状態反映前に破棄しても実行したAPIは記録する。通信失敗時のstatusやusageはnullになり得る。
+- samples.pipelines: 直近60判断。id、stream_id、frame_id、frame_received_at、started_at、completed_at、duration_ms、outcome(committed / discarded / error)、reason。API呼び出しとrun_idで照合する。
+- api_attempts_total / pipeline_total: 保存開始以降の累計試行件数。トークンが不明な失敗も含み、請求額の確定値ではない。
+- stages: stageごとのcount / p50_ms / p95_ms / max_ms / errors / timeouts、および同じstream内の実際の開始間隔interval。RTT分布には失敗・タイムアウトも含む。
+- pipeline: 全判断のp50 / p95、破棄数、失敗数、判断開始時の画像の古さ。duration_msはBEの判断処理全体で、端末での撮影時間は含まない。
+- transport: frames_received、bytes_received、直近30秒/最大120枚のreceived_fps・frame_interval、upload_rtt、viewer_ack_rtt、action_ack_rtt、frame_to_action_ack、rejected_actions。
+- pacing: stream_fps、evaluation_interval_ms、narration_interval_ms。希望する映像レートと、判断/本音生成の最短開始間隔。
+
+API/判断の履歴はDOのtelemetry:<device_id>へ有界保存し、再起動後も復元する。画像・音声・プロンプト・生成文・APIキー・エラー本文は保存しない。
+transportの直近標本とカウンターはstreamごとにリセットする。RTTがまだない場合はnullを返し、0msや取得済みとして扱わない。
+履歴から将来の遅延を保証しない。比較時は同じ観察時間、入力源、解像度、viewer数、接続先、個体数を揃える。
+collectorもviewerとして受信ACKを返すため、viewer_ack_rttは接続中の全viewerの受信確認を含む。
+
+```json
+{"type":"frame_received","timestamp":1792300000000,"data":{"stream_id":"opaque-stream-id","frame_id":120}}
+```
+
+FWは同じ接続内のframe_idについて送信時刻と受信確認の時刻から往復時間を計測できる。
+FWのdevice_status.dataには任意のtransportを追加できる。
+
+```json
+{"transport":{"upload_rtt_ms":12}}
+```
+
+upload_rtt_msは0〜60000または未計測のnull。BEはFWの申告値として記録する。
+BEからのactionを受信したFWは、対応できる場合に次を返す。seqは現在のFW接続で受信した指令の番号。
+
+```json
+{"type":"action_ack","timestamp":1792300000000,"data":{"seq":3,"accepted":true}}
+```
+
+BEは送信からACKまでを自分の時計で計測する。accepted=falseなら受信したが実行を受け付けなかった意味。
+AIの判断から発行した指令については、BE画像受信→FW受信ACKの時間も記録する。モーター動作完了や撮影→動作の全経路時間ではない。
+既存のframe_ackはBE→FE画像受信確認の往復を計測する。現在のLabは描画前にACKを送るため、GPU描画の完了時間は含めない。
+古いFWはframe_receivedを無視してよく、action_ack / transport申告がなければ該当RTTは未計測となる。
+
+環境変数で独立して設定する。STREAM_FPS=1〜10（既定2）、EVAL_INTERVAL_MS=500〜10000（既定2000）、
+NARRATION_INTERVAL_MS=1000〜30000（既定2000）。未設定・範囲外は既定値を使う。
+STREAM_FPSはLabカメラとdemoシミュレーターの目標値。実FWに強制適用しないため、実機はFW側で合わせる。
+判断は引き続き単一実行・最新画像のみを使用し、API待ちが長くても古い画像をキューへ積まない。
+
+## 7. エラー・切断・再接続
 
 HTTP APIのエラーは`{"error":{"code":"...","message":"..."}}`。
 Upgrade前の拒否も同じHTTP形式を使う。ただしブラウザのWS APIではHTTP本文を取得できないため、
@@ -248,7 +499,7 @@ BEが15秒受信しなければ4000で閉じ、制御権を解放する。認証
 FEは各WSが閉じた時点でその本体の顔枠を消し、稼働情報を未確認として扱う。
 再接続時に画像・検出・actionを再送しない。新session/streamから再開する。
 
-## 7. 担当間の接続チェック
+## 8. 担当間の接続チェック
 
 - FW: room/device_idと自機トークンを設定し、session → JPEG送信 → action受信まで確認。
 - FE: 一覧取得 → 本体選択 → viewer接続 → stream/JPEG表示まで確認。
@@ -256,6 +507,8 @@ FEは各WSが閉じた時点でその本体の顔枠を消し、稼働情報を�
 - BE/FW: frame_idヘッダーとseqの再接続時リセット、pan/tiltの方向を実機で確認。
 - 全員: 同じroomに本体2台を接続し、同じframe_idでも画像・感情・動作が混ざらないことを確認。
 - 全員: 本体Aの切断・再接続中もBが継続し、Aの古いstreamの検出・AI結果が適用されないことを確認。
+- 全員: 本音の喜びとneutral/nodの建前が共存し、相手への会話に本音が含まれないことを確認。
+- 全員: greet→acknowledge→非言語反応が成立し、返答のループ・切断後の再配送がないことを確認。
 - 全員: 本体Aの制御競合、本体Bの独立した制御、一般viewerからの送信拒否を確認。
 
 FPS・推論周期・遅延や複数台時の負荷は未検証。接続台数が増えても各本体の契約は同じとし、
@@ -263,6 +516,26 @@ FPS・推論周期・遅延や複数台時の負荷は未検証。接続台数�
 
 ## 参考
 
-- [設計案 v1.0（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
+- [設計書 v1.6（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
 - [Cloudflare Durable Objects WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
 - [ブラウザのWebSocketコンストラクター](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/WebSocket)
+
+意向choiceのconfidenceは0〜1の表示値で、採用の固定閾値には使わない。候補外・不正型・範囲外・refusalは拒否する。人間イベントの観察閾値は従来どおり。
+
+## 実APIセッションの開始と上限
+
+通常のローカルdemo/dev/E2Eはモック。キーがあるだけでは実APIを呼ばない。
+`npm run demo:openai`を明示実行し、既定60秒または全デバイス・全ルーム合計30リクエストの先着で停止する。
+DecisionsとResponsesを送信前の予約で合算し、失敗とタイムアウトも数える。
+セッションの期限・予約数は再接続やWorker再起動で更新しない。上限後の自動再開はしない。
+`GET /health`は次の`paid_session`を追加する（既存WSメッセージの変更なし）。
+
+```json
+{"active":true,"reason":null,"expires_at":1792270800000,"max_calls":30,"used_calls":12}
+```
+
+`expires_at`はUnixミリ秒、未設定ならnull。`reason`は実行可能時null、それ以外は
+`mock` / `not_started` / `expired` / `call_limit`。`used_calls`はセッション全体の予約数であり、
+映像や質問数、ドル建て費用ではない。参照は開始・延長・回数リセットをしない。
+上限後はBEで送信を拒否し、デモプロセスは自動終了する。時間切れは進行中の通信も中断する。
+起動と上限のオプションは[起動手順](../back/README.md)を参照。

@@ -1,0 +1,17 @@
+# Local-only examples. Never use these tokens or signing key on the public deployment.
+ALLOWED_ORIGIN="http://127.0.0.1:8787"
+SESSION_SECRET="local-only-session-signing-key-change-before-deploy"
+ROOM_CONFIG='{"main":{"control_token":"dev-control-main","devices":{"stackchan-01":"dev-device-01","stackchan-02":"dev-device-02"}}}'
+# Optional for npm run demo:openai / check:openai. Use one source; never commit actual secrets.
+# OPENAI_API_KEY_REF="op://<vault>/<item>/<field>"
+# OP_BIN="/absolute/path/to/op"
+# OPENAI_API_KEY="<local-only-api-key>"
+
+# Independent target rates; optional, validated by the BE (defaults shown).
+# STREAM_FPS="2"
+# EVAL_INTERVAL_MS="2000"
+# NARRATION_INTERVAL_MS="2000"
+
+# demo/dev default to mock even with a key. Paid sessions start only via demo:openai.
+# Default paid limits: 60 seconds / 30 total HTTP requests (Decisions + Responses).
+# Override only at explicit start: npm run demo:openai -- --seconds 120 --max-calls 50
