@@ -1,4 +1,4 @@
-# 通信仕様 v1.9 — FE / BE / FW
+# 通信仕様 v2 — FE / BE / FW
 
 更新日: 2026-10-18。対象: 2026-10-18のハッカソン。
 
@@ -8,7 +8,7 @@
 
 ## 通信契約の型と共有方法
 
-コード上の入口は [`back/src/protocol.ts`](../back/src/protocol.ts)。文書の改訂はv1.9、WSの`protocol_version`は引き続き1。
+コード上の入口は [`back/src/protocol.ts`](../back/src/protocol.ts)。device sessionは`protocol_version: 2`が必須。viewer/controller sessionは1を維持する。原要求は[raw camera spec](raw_camera_transport_v2.md)を参照。
 FEは`ClientMessage` / `ServerMessage`を型としてimportする。FW実装者はこの文書の値域・送信経路を参照する。
 
 - `ClientData` / `ServerData`: メッセージ種別からdata型への対応。`ClientMessage` / `ServerMessage`はtypeでdataを絞り込めるunion。
@@ -40,7 +40,7 @@ BEは全送信イベントのdata型をチェックし、シミュレーター�
 
 ## 1. 設計案からの変更と固定事項
 
-[設計書 v1.9](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
+[設計書 v1.9](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙を引き継ぎ、FW入力だけraw v2へ変更する。
 以下は設計案の追加・変更であり、通信については本書を優先する。
 
 - **同一roomに複数のスタックチャンが参加可能**。各本体はroom内で一意な`device_id`を持つ。
@@ -50,7 +50,7 @@ BEは全送信イベントのdata型をチェックし、シミュレーター�
 - `detection.data.stream_id`と`decision.data.stream_id`を追加し、本体再接続前の結果を区別する。
 - `frame_ack`を追加し、遅い閲覧者へ画像を無制限に送らない。
 - 本音の`mind`、建前の`behavior`、room会話の`dialogue` / `dialogue_history`を追加する。
-- 追加イベントは後方互換の拡張とし、sessionのprotocol_versionは1を維持する。
+- 旧FWのJPEGアップロード互換性は廃止する。viewer/controllerのsession v1とJPEG出力は維持する。
 
 roomはグループ、device_idは本体の識別子。例: `main`に`stackchan-01`と`stackchan-02`。
 両識別子は`^[a-z0-9][a-z0-9_-]{0,31}$`。URLの両パラメーターは必須。
@@ -133,7 +133,8 @@ BEの期限・順序判定にはBE受信時刻と内部の受信順を使う。�
 
 | type / 形式 | 送信経路 | 内容 |
 |---|---|---|
-| Binary | FW → BE → FE | `uint32 BE frame_id` + JPEG |
+| Binary | FW → BE | SCFW v2 + 160×120 RGB565LE（38416 bytes） |
+| Binary | BE → FE | `uint32 BE frame_id` + BE生成JPEG |
 | `device_status` | FW → BE → FE | 稼働情報。onlineの最終判断はBE |
 | `detection` | 制御FE → BE | 対象画像の顔検出 |
 | `emotion` | BE → FE | 5項目の仮想感情 |
@@ -148,7 +149,7 @@ BEの期限・順序判定にはBE受信時刻と内部の受信順を使う。�
 | `telemetry` | BE → 対象本体のFE | API段階別RTT・呼び出し間隔・映像受信・ACK往復・処理結果の集計 |
 | `telemetry_request` | FE → BE | 計測の詳細標本を要求。viewer/controllerのみ、1秒に1回まで |
 | `telemetry_snapshot` | BE → 要求したFE | 集計値に詳細標本samplesを追加した一回の応答 |
-| `frame_received` | BE → FW | JPEGの受信確認。認識や描画の完了通知ではない |
+| `frame_received` | BE → FW | rawの受信確認。変換・認識・描画の完了通知ではない |
 | `action_ack` | FW → BE | 指令の受信・受け付け可否。モーター動作完了ではない |
 | `mind` | BE → 対象本体のFE | 本音・性格・意向・親しみ |
 | `memory` | BE → 対象本体のFE | 初回参加日時・保存日時・体験件数 |
@@ -171,20 +172,41 @@ roleは`device | viewer | controller`。制御FEは`controller`受信後に検�
 
 ## 4. 画像・stream・顔検出
 
-画像ヘッダーは設計案どおり。1 WSメッセージに1画像を格納する。
+FW → BEは認証済みdevice WSのみ。**160×120 RGB565LE raw v2固定**。1 WSメッセージに1画像を格納する。320×240は初期版で受け付けない。
+
+| Offset | Bytes | 内容 |
+|---|---|---|
+| 0 | 4 | ASCII `SCFW` |
+| 4 | 1 | version = 2 |
+| 5 | 1 | pixel format = 1 (RGB565LE) |
+| 6 | 2 | width = 160 (uint16 BE) |
+| 8 | 2 | height = 120 (uint16 BE) |
+| 10 | 4 | frame_id (uint32 BE) |
+| 14 | 2 | reserved flags = 0 |
+| 16 | 38400 | RGB565 low byte first、行優先、paddingなし |
+
+全長は**38416 bytesちょうど**。不正ヘッダー・短い入力・旧JPEG入力は`invalid_raw_frame` / 1008、超過長は`frame_too_large` / 1009で切断する。未認証はWS接続時に拒否し、変換しない。
+FWは次のsessionのversion/format/寸法を検証してから送信する。不一致なら送信せず安全に切断する。JPEG fallbackはない。
+
+```json
+{"type":"session","timestamp":0,"data":{"protocol_version":2,"role":"device","room":"main","device_id":"stackchan-01","frame_format":"rgb565le-v2","width":160,"height":120}}
+```
+
+BEがRGB565をJPEG quality 75へ変換する。BE → viewerの形式とDecisions入力は従来形式を維持し、rawを渡さない。
 
 ```text
 offset 0..3: frame_id (uint32, big-endian)
-offset 4.. : JPEG bytes
+offset 4.. : backend-produced JPEG bytes (160x120)
 ```
 
-初期目標は320×240・2fps。1fps / 160×120へ縮小してもヘッダーは変えない。
+roomごとに変換中1枚、待機は認可済みデバイスごとの最新1枚だけ。待機中の旧画像を置き換え、3000ms超過・旧接続/stream・変換後により新しい入力がある結果は破棄する。
+`frame_received`はrawの検証・順序受け付け直後の確認で、変換完了やviewer配送を保証しない。
 FWはフレームごとにIDを1増やす（uint32循環）。再接続時は0に戻してよい。
 BEはデバイスごとに最新画像だけを推論用メモリーに保持し、画像を永続保存しない。
 FW・BE・FEはアプリ内の未処理画像を積み上げず最新を優先する。
 既に送信したWSメッセージは取り消せないため、配送済み古フレームの到着はあり得る。
 FEは画像を受信・消費（描画待ちの旧画像を破棄する場合も含む）するごとに、同じstream/frame_idで受信確認を返す。
-BEは受信した全画像を接続中の通常FEへ中継し、OpenAIの評価間隔による間引きはしない。未ACKは接続ごとに最大120枚・合計8MiB（4バイトヘッダー込み）、最古の未ACKから2000msまで。次の送信で枚数・バイト数の上限を超える場合、または期限到達時に1013 / slow_viewerで閉じる。他の閲覧者は待たせない。
+BEは変換・鮮度検査を通過した全JPEGを接続中の通常FEへ中継し、OpenAIの評価間隔では間引かない。rawの最新優先による破棄は別途記録する。未ACKは接続ごとに最大120枚・合計8MiB（4バイトヘッダー込み）、最古の未ACKから2000msまで。次の送信で枚数・バイト数の上限を超える場合、または期限到達時に1013 / slow_viewerで閉じる。他の閲覧者は待たせない。
 期限は送信前と500ms周期で検査するため、送信が止まってもおおむね2500ms以内に閉じる。ACK待ちで画像の独自キューや再送は作らず、管理情報だけを保持する。
 確認は画像配送のフロー制御用であり、顔検出の完了確認ではない。検出は別途非同期に送る。
 
@@ -511,7 +533,7 @@ FEは接続失敗を表示し、再ログインや閲覧接続への切り替え
 ```
 
 閲覧者からのdetectionやFW以外からのBinaryなど、権限外送信は`forbidden`通知後1008で閉じる。
-JSONは最大16 KiB、画像はヘッダー込み最大256 KiB。超過は1009。
+JSONは最大16 KiB。FW raw入力はヘッダー込み38416 bytesちょうど。超過は1009、不正形式・短い入力は1008。
 
 | close code | 動作 |
 |---|---|
@@ -534,7 +556,7 @@ FEは各WSが閉じた時点でその本体の顔枠を消し、稼働情報を�
 
 ## 8. 担当間の接続チェック
 
-- FW: room/device_idと自機トークンを設定し、session → JPEG送信 → action受信まで確認。
+- FW: room/device_idと自機トークンを設定し、session v2検証 → RGB565LE raw送信 → action受信まで確認。
 - FE: 一覧取得 → 本体選択 → viewer接続 → stream/JPEG表示まで確認。
 - FE/BE: ログイン → control=1 → sessionのrole確認 → stream_id付きdetection送信まで確認。
 - BE/FW: frame_idヘッダーとseqの再接続時リセット、pan/tiltの方向を実機で確認。
@@ -613,3 +635,17 @@ JSONのWebSocketモニター契約は引き続き読み取り専用。開始・�
 
 `GET /api/rooms/<room>/devices`は診断用runtime（最後に評価したai_mode、paid_control_enabled、
 key_configured、実行バージョン）も返す。公開設定と部屋側の設定反映を比較でき、キー自体は返さない。
+
+
+## Raw v2のメトリクスと協調切り替え
+
+`telemetry.transport.input_format = rgb565le-v2`。`frames_received` / `bytes_received` / `received_fps`は認証・形式・順序検証を通ったraw入力を数える。
+`conversion`に`count/p50_ms/p95_ms/max_ms`（最新120件）、`converted_total`、`published_total`、`dropped_total`、`errors`を追加する。
+convertedはencode完了数、publishedは鮮度検査を通り内部JPEGへ公開した数、droppedは待機置換・期限・旧世代・変換後のsupersededを含む。変換後破棄はconvertedとdroppedの両方に含まれる。
+`timing = encode_and_yield_wall_ms`は**変換＋timer yieldの経過時間**であり、CPU課金時間ではない。公開Workersの時計はI/O時だけ進むため、純CPU処理の前後差分をCPU時間と扱わない。CPU特性はローカルworkerd、公開CPUはCloudflareのCPUプロファイルで確認する。
+画像・raw bytes・Bearer token・API入力本文をメトリクスに含めない。
+
+BE公開とv2 FW書き込みは協調する。**BE公開後〜v2 FW書き込みまでは旧FWはofflineになる**。旧JPEGを自動fallbackで動かさない。
+公開後はdevice session v2、raw受信、viewer JPEG、Decisions用JPEG data URLを順に確認する。実API開始は既存の明示開始・期限・回数上限・停止ガードを継続する。
+rawは38416 bytes/枚で、60fpsなら約18.44Mbps/台（WS/TLS/TCP別）。60fpsは設定目標で、実機のfpsや改善を保証しない。
+再現手順・結果・測定の限界は[raw v2検証記録](raw_camera_transport_v2_validation.md)を参照。

@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { once } from 'node:events';
 import WebSocket from 'ws';
-import { syntheticJPEG } from '../scripts/fw-simulator.mjs';
+import { syntheticRawPacket } from '../scripts/fw-simulator.mjs';
 const base = 'http://127.0.0.1:8794';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function fixture(vars) {
@@ -29,7 +29,7 @@ async function fixture(vars) {
   }
   async function connect(room) {
     const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/device?room=${room}&device_id=robot`, { headers: { Authorization: 'Bearer fake-device' } }); sockets.push(ws); await once(ws, 'open');
-    const jpeg = await syntheticJPEG(1), packet = Buffer.alloc(jpeg.length + 4); packet.writeUInt32BE(1); jpeg.copy(packet, 4); ws.send(packet); return ws;
+    const packet = await syntheticRawPacket(1); ws.send(packet); return ws;
   }
   async function loginControl() {
     const response=await fetch(base+'/api/control/session',{method:'POST',headers:{Origin:'http://127.0.0.1:8787','Content-Type':'application/json'},body:JSON.stringify({room:'main',token:'fake'})});

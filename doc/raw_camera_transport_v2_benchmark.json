@@ -1,0 +1,57 @@
+{
+  "runtime": "local workerd (Miniflare)",
+  "bundle_bytes": 7949,
+  "bundle_gzip_bytes": 3763,
+  "samples_per_scene": 1000,
+  "scenes": [
+    {
+      "scene": "solid",
+      "raw_bytes": 38416,
+      "jpeg_packet_bytes": 1142,
+      "warm_p50_ms": 0,
+      "warm_p95_ms": 1,
+      "warm_max_ms": 4,
+      "batch_wall_ms": 430.95787499999994,
+      "first_scene_ms": 4
+    },
+    {
+      "scene": "gradient",
+      "raw_bytes": 38416,
+      "jpeg_packet_bytes": 8286,
+      "warm_p50_ms": 1,
+      "warm_p95_ms": 1,
+      "warm_max_ms": 2,
+      "batch_wall_ms": 690.1138749999998,
+      "first_scene_ms": 2
+    },
+    {
+      "scene": "noise",
+      "raw_bytes": 38416,
+      "jpeg_packet_bytes": 23619,
+      "warm_p50_ms": 2,
+      "warm_p95_ms": 3,
+      "warm_max_ms": 12,
+      "batch_wall_ms": 2134.0020409999997,
+      "first_scene_ms": 3
+    }
+  ],
+  "heap_before": {
+    "usedSize": 9017496,
+    "totalSize": 17072128,
+    "embedderHeapUsedSize": 515872,
+    "backingStorageSize": 344184
+  },
+  "heap_after": {
+    "usedSize": 12683620,
+    "totalSize": 26247168,
+    "embedderHeapUsedSize": 515872,
+    "backingStorageSize": 1570606
+  },
+  "heap_sampled_peak_bytes": 15486804,
+  "recorded_on": "2026-10-18",
+  "measurement_notes": [
+    "Local workerd elapsed encoder timing, 1ms resolution; not production billed CPU.",
+    "Encoder was initialized before sampled scene runs; initial allocation time is not included in this saved run.",
+    "Inspector heaps sampled between batches of 100 frames; not a hard peak or a complete Room/connection memory total."
+  ]
+}

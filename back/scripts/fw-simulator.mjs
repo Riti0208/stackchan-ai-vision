@@ -23,12 +23,26 @@ export async function syntheticJPEG(frame, device = 'stackchan-01') {
   const accent = device.endsWith('02') ? '#eeb66b' : '#7edccc';
   return sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="#15282d"/><path d="M0 190H320M80 0V240M160 0V240M240 0V240" stroke="#294047"/><rect x="12" y="12" width="296" height="26" rx="5" fill="#203b42"/><text x="20" y="30" fill="${accent}" font-family="sans-serif" font-size="13">${device} / FRAME ${frame}</text><ellipse cx="${x}" cy="${y}" rx="48" ry="48" fill="${accent}"/>${eyes}${mouth}${brows}${tears}${hand}<text x="16" y="221" fill="#a3bdc2" font-family="sans-serif" font-size="12">SIMULATED CAMERA / 320 x 240 / 2 FPS</text></svg>`)).jpeg({ quality: 75 }).toBuffer();
 }
+/** Build a strict device-upload packet from RGBA bytes (also used by the local camera bridge). */
+/** @param {number} frame @param {Uint8Array} rgba */
+export function rgb565Packet(frame, rgba) {
+  if (rgba.length !== 160 * 120 * 4) throw new Error('RGBA must be 160x120');
+  const packet = Buffer.alloc(16 + 160 * 120 * 2); packet.write('SCFW'); packet[4] = 2; packet[5] = 1;
+  packet.writeUInt16BE(160, 6); packet.writeUInt16BE(120, 8); packet.writeUInt32BE(frame >>> 0, 10);
+  for (let i = 0, j = 16; i < rgba.length; i += 4, j += 2) packet.writeUInt16LE(((rgba[i] >> 3) << 11) | ((rgba[i+1] >> 2) << 5) | (rgba[i+2] >> 3), j);
+  return packet;
+}
+/** @param {number} frame */
+export async function syntheticRawPacket(frame, device = 'stackchan-01') {
+  const rgba = await sharp(await syntheticJPEG(frame, device)).resize(160, 120).ensureAlpha().raw().toBuffer();
+  return rgb565Packet(frame, rgba);
+}
 export class Simulator {
   /** @type {WebSocket | undefined} */ ws;
   /** @type {ReturnType<typeof setInterval> | undefined} */ frameTimer;
   /** @type {ReturnType<typeof setInterval> | undefined} */ statusTimer;
   /** @type {ReturnType<typeof setTimeout> | undefined} */ retry;
-  /** @type {Buffer | null} */ cameraJPEG = null;
+  /** @type {Buffer | null} */ cameraRaw = null;
   /** @type {WebSocket | null} */ cameraPeer = null;
   sending = false;
   /** @param {SimulatorOptions} options */
@@ -45,17 +59,23 @@ export class Simulator {
     url.search = new URLSearchParams({ room: this.room, device_id: this.id }).toString();
     const ws = this.ws = new WebSocket(url, { headers: { Authorization: `Bearer ${this.token}` } });
     ws.on('open', () => {
-      this.connected = true; this.attempt = 0; this.frame = 0; this.lastSeq = 0; this.frameSentAt = new Map(); this.uploadRTT = null; this.action = { action: 'idle', pan: 0, tilt: 0, expression: 'neutral' }; this.gestureUntil = 0;
-      this.notify({ type: 'sim_connected', device_id: this.id });
-      this.status(); this.sendFrame();
-      this.frameTimer = setInterval(() => this.sendFrame(), 1000 / this.fps);
-      this.statusTimer = setInterval(() => this.status(), 5000);
+      if (ws !== this.ws) return;
+      this.connected = false; this.attempt = 0; this.frame = 0; this.lastSeq = 0; this.frameSentAt = new Map(); this.uploadRTT = null; this.action = { action: 'idle', pan: 0, tilt: 0, expression: 'neutral' }; this.gestureUntil = 0;
+
     });
     ws.on('message', (raw, binary) => {
+      if (ws !== this.ws) return;
       if (binary) return;
       const m = parseDeviceServerMessage(raw.toString());
-      if (!m) { this.notify({ type: 'sim_error', device_id: this.id, data: { message: 'Invalid BE message; ignored' } }); return; }
-      if (m.type === 'frame_received') {
+      if (!m) { this.notify({ type: 'sim_error', device_id: this.id, data: { message: 'Invalid BE message; ignored' } }); try { if (JSON.parse(raw.toString()).type === 'session') ws.close(1008, 'unsupported_session'); } catch {} return; }
+      if (m.type === 'session') {
+        if (ws !== this.ws || this.connected) return;
+        this.connected = true; this.notify({ type: 'sim_connected', device_id: this.id });
+        this.status(); this.sendFrame();
+        this.frameTimer = setInterval(() => this.sendFrame(), 1000 / this.fps);
+        this.statusTimer = setInterval(() => this.status(), 5000);
+      } else if (!this.connected) return;
+      else if (m.type === 'frame_received') {
         const sent = this.frameSentAt.get(m.data.frame_id);
         if (sent !== undefined) { this.uploadRTT = Math.round(performance.now() - sent); this.frameSentAt.delete(m.data.frame_id); }
       } else if (m.type === 'action') {
@@ -73,6 +93,7 @@ export class Simulator {
     ws.on('unexpected-response', (_, res) => { this.notify({ type: 'sim_error', device_id: this.id, data: { message: `Handshake HTTP ${res.statusCode}` } }); res.resume(); ws.emit('close', 1008); });
     ws.on('error', error => this.notify({ type: 'sim_error', device_id: this.id, data: { message: error instanceof Error ? error.message : 'Simulator error' } }));
     ws.on('close', code => {
+      if (ws !== this.ws) return;
       clearInterval(this.frameTimer); clearInterval(this.statusTimer); this.connected = false;
       this.action = { action: 'idle', pan: 0, tilt: 0, expression: 'neutral' };
       this.notify({ type: 'sim_disconnected', device_id: this.id, data: { code } });
@@ -87,11 +108,10 @@ export class Simulator {
     try {
       const socket = this.ws;
       const frame = this.frame++ >>> 0;
-      const jpeg = this.cameraJPEG || (this.files.length ? await readFile(this.files[frame % this.files.length]) : await syntheticJPEG(frame, this.sharedImage ? 'shared-scene' : this.id));
-      if (jpeg.length + 4 > 256 * 1024) throw new Error('JPEG exceeds 256 KiB; reduce image dimensions/quality');
-      const payload = Buffer.allocUnsafe(4 + jpeg.length); payload.writeUInt32BE(frame); jpeg.copy(payload, 4);
+      const payload = this.cameraRaw ? Buffer.from(this.cameraRaw) : this.files.length ? rgb565Packet(frame, await sharp(await readFile(this.files[frame % this.files.length])).resize(160, 120).ensureAlpha().raw().toBuffer()) : await syntheticRawPacket(frame, this.sharedImage ? 'shared-scene' : this.id);
+      payload.writeUInt32BE(frame, 10);
       if (this.ws === socket && socket.readyState === WebSocket.OPEN) { this.frameSentAt.set(frame, performance.now()); if (this.frameSentAt.size > 16) this.frameSentAt.delete(this.frameSentAt.keys().next().value ?? 0); socket.send(payload); }
-      this.notify({ type: 'sim_frame', device_id: this.id, data: { frame_id: frame, source: this.cameraJPEG ? 'camera' : this.files.length ? 'files' : 'synthetic' } });
+      this.notify({ type: 'sim_frame', device_id: this.id, data: { frame_id: frame, source: this.cameraRaw ? 'camera' : this.files.length ? 'files' : 'synthetic' } });
     } catch (error) { this.notify({ type: 'sim_error', device_id: this.id, data: { message: error instanceof Error ? error.message : 'Simulator error' } }); }
     finally { this.sending = false; }
   }
@@ -137,9 +157,9 @@ export function startGateway(simulators, { port = 8790, origin = 'http://127.0.0
         if (sim.cameraPeer) sim.cameraPeer.close(4001, 'replaced'); sim.cameraPeer = ws;
         ws.on('message', (raw, binary) => {
           const bytes = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.isBuffer(raw) ? raw : Buffer.from(new Uint8Array(raw));
-          if (sim.cameraPeer === ws && binary && bytes[0] === 255 && bytes[1] === 216 && bytes.at(-2) === 255 && bytes.at(-1) === 217) sim.cameraJPEG = bytes;
+          if (sim.cameraPeer === ws && binary && bytes.length === 38416 && bytes.subarray(0, 6).equals(Buffer.from([83,67,70,87,2,1])) && bytes.readUInt16BE(6) === 160 && bytes.readUInt16BE(8) === 120 && bytes.readUInt16BE(14) === 0) sim.cameraRaw = bytes;
         });
-        ws.on('close', () => { if (sim.cameraPeer === ws) { sim.cameraPeer = null; sim.cameraJPEG = null; } });
+        ws.on('close', () => { if (sim.cameraPeer === ws) { sim.cameraPeer = null; sim.cameraRaw = null; } });
       }
     });
   });

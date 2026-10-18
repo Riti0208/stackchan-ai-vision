@@ -41,7 +41,7 @@ test('FW accepts bounded commands/session/frame ACK/error and ignores malformed 
   assert.equal(parseDeviceServerMessage(serializeServer('action', command)).type, 'action');
   for (const patch of [{ seq: 0 }, { seq: -1 }, { pan: 1.01 }, { tilt: -1.01 }, { duration_ms: 99 }, { duration_ms: 3001 }, { duration_ms: 100.5 }, { expression: 'angry' }, { action: 'run' }]) assert.equal(parseDeviceServerMessage(wire('action', { ...command, ...patch })), null);
   assert.equal(parseDeviceServerMessage(wire('frame_received', { stream_id: 's', frame_id: 0 } )).type, 'frame_received');
-  assert.equal(parseDeviceServerMessage(wire('session', { protocol_version: 1, room: 'main', device_id: 'robot', role: 'device' })).type, 'session');
+  assert.equal(parseDeviceServerMessage(wire('session', { protocol_version: 2, frame_format: 'rgb565le-v2', width: 160, height: 120, room: 'main', device_id: 'robot', role: 'device' })).type, 'session');
   assert.equal(parseDeviceServerMessage(wire('error', { code: 'invalid_message', message: 'invalid_message' })).type, 'error');
   for (const raw of ['{', wire('mind', { thought: 'private' }), wire('session', { protocol_version: 1, room: 'main', device_id: 'robot', role: 'controller' })]) assert.equal(parseDeviceServerMessage(raw), null);
 });
@@ -60,4 +60,9 @@ test('communication document client and motor examples match shared runtime vali
     }
   }
   assert.ok(checked >= 6);
+});
+
+test('device sessions require v2 format and dimensions; legacy or incomplete sessions fail closed',()=>{
+ const session={protocol_version:2,frame_format:'rgb565le-v2',width:160,height:120,room:'main',device_id:'robot',role:'device'};
+ for(const changed of [{protocol_version:1},{frame_format:'jpeg'},{width:320},{height:240},{frame_format:undefined}])assert.equal(parseDeviceServerMessage(wire('session',{...session,...changed})),null);
 });

@@ -1,3 +1,4 @@
+import { parseRawFrame, encodeRawFrame, LatestFrames, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
 import { FrameWindow } from './frame-window';
 import { monitorHTML, monitorJS } from './monitor';
 import { logConnection, logRun, logTransport } from './observability';
@@ -21,7 +22,7 @@ type Device = {
   id: string; room: string; mind: Mind; behavior?: Behavior; inbox: Dialogue[]; experienced: Set<string>; greeted: Set<string>; publicHistory: Dialogue[];
   peer?: Peer; stream: string | null; viewers: Set<Peer>; controller?: Peer;
   emotion: Emotion; status: DeviceStatus; seq: number; pan: number; tilt: number;
-  order: number; frames: Map<number, { order: number; at: number }>; detectedOrder: number;
+  order: number; inputId?: number; frames: Map<number, { order: number; at: number }>; detectedOrder: number;
   retryAt: number; lastDecision: number; lastAI: number; busy: boolean; gestureUntil: number; lastDetection: number; lastGesture: number;
   lastTextAt: number; textRetryAt: number; textEmotion?: Emotion;
   metrics: History; transport: Transport; lastTelemetry: number; lastTransportLog?: number; actionSentAt: Map<number, { sent: number; frame_at?: number }>; human: HumanActionState; lastChoice?: string; affectiveHistory: Experience[]; firstJoinAt: number | null; totalExperiences: number;
@@ -74,7 +75,7 @@ export default {
     if (url.pathname === '/health') {
       const state: BudgetStatus = env.ENABLE_PAID_CONTROL === 'true' || env.AI_MODE === 'decisions' ? await (await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : paidSession(env);
       const mode = env.ENABLE_PAID_CONTROL === 'true' ? state.active ? 'decisions' : 'mock' : env.AI_MODE || 'mock';
-      return json({ paid_session: state, paid_control: { enabled: env.ENABLE_PAID_CONTROL === 'true', key_configured: !!env.OPENAI_API_KEY?.trim(), room: env.PAID_CONTROL_ROOM || 'main' }, ok: true, ai_mode: mode, protocol_version: 1, ai_model: mode === 'decisions' ? DECISIONS_MODEL : null, narration_model: mode === 'decisions' ? DECISIONS_MODEL : null, ai_configured: mode !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
+      return json({ paid_session: state, paid_control: { enabled: env.ENABLE_PAID_CONTROL === 'true', key_configured: !!env.OPENAI_API_KEY?.trim(), room: env.PAID_CONTROL_ROOM || 'main' }, ok: true, ai_mode: mode, protocol_version: 1, device_protocol_version: 2, ai_model: mode === 'decisions' ? DECISIONS_MODEL : null, narration_model: mode === 'decisions' ? DECISIONS_MODEL : null, ai_configured: mode !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
     }
     if (url.pathname === '/' || url.pathname.startsWith('/lab')) {
       if (!env.ASSETS || (url.pathname.startsWith('/lab') && env.ENABLE_LAB !== 'true')) return fail(404, 'not_found');
@@ -151,6 +152,8 @@ export class Room {
   private lastRuntimeMode = 'not_evaluated';
   private activeAPICalls = new Map<string, ServerData['api_activity']>();
   private pendingAI = new Set<AbortController>();
+  private rawFrames = new LatestFrames<{ d: Device; p: Peer; stream: string; raw: RawFrame; at: number; order: number }>();
+  private conversionScheduled = false;
   constructor(private ctx: DurableObjectState, private env: Env, private aiFetch: typeof fetch = (input, init) => fetch(input, init)) {
     this.aiFetch = aiFetch;
     this.ready = ctx.blockConcurrencyWhile(async () => {
@@ -254,7 +257,7 @@ export class Room {
       d.lastTextAt = 0; d.textRetryAt = 0; d.textEmotion = undefined; d.busy = false; d.lastChoice = undefined; d.human = initialHumanActions(d.human);
       await this.persist(d);
       d.peer = p; d.stream = crypto.randomUUID(); d.transport = newTransport(d.stream); d.actionSentAt.clear(); d.latest = undefined; d.frames.clear();
-      d.seq = 0; d.pan = 0; d.tilt = 0; d.order = 0; d.detectedOrder = -1; d.lastDecision = -1; d.gestureUntil = 0; d.lastDetection = 0;
+      d.seq = 0; d.pan = 0; d.tilt = 0; this.rawFrames.cancel(d.id); d.inputId = undefined; d.order = 0; d.detectedOrder = -1; d.lastDecision = -1; d.gestureUntil = 0; d.lastDetection = 0;
       d.status = { online: true, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' };
       logConnection(d, true);
       for (const viewer of d.viewers) { viewer.frames.clear(); }
@@ -263,7 +266,7 @@ export class Room {
       if (role === 'controller') { if (d.controller) { d.viewers.delete(d.controller); close(d.controller, 4001, 'replaced'); } d.controller = p; }
       d.viewers.add(p);
     }
-    send(p, 'session', { protocol_version: 1, room, device_id: id, role });
+    send(p, 'session', role === 'device' ? { ...deviceSession, room, device_id: id, role } : { protocol_version: 1, room, device_id: id, role });
     if (role !== 'device') { send(p, 'stream', { stream_id: d.stream }); send(p, 'emotion', d.emotion); send(p, 'device_status', d.status); send(p, 'mind', d.mind); send(p, 'behavior', d.behavior || null); send(p, 'dialogue_history', { messages: this.dialogue }); send(p, 'memory', this.memory(d)); send(p, 'telemetry', this.telemetry(d)); }
     if (p.monitor) for (const activity of this.activeAPICalls.values()) if (activity.device_id === id) send(p, 'api_activity', activity);
     server.addEventListener('message', event => this.message(p, d, event.data));
@@ -274,6 +277,7 @@ export class Room {
   }
   private cleanup(p: Peer, d: Device) {
     if (p.role === 'device' && d.peer === p) {
+      if (this.rawFrames.cancel(d.id)) d.transport.conversion_dropped++;
       logConnection(d, false);
       this.cancelConversations(d.id);
       d.mind = { ...d.mind, revision: d.mind.revision + 1, intent: 'rest', target: { kind: 'none', device_id: null }, valid_until: 0 }; d.behavior = undefined;
@@ -289,22 +293,17 @@ export class Room {
     if ((p.role === 'controller' || p.monitor) && p.expires! <= Date.now()) { close(p, 4003, 'session_expired'); return; }
     if (typeof raw !== 'string') {
       if (p.role !== 'device') return this.reject(p, 'forbidden', true);
-      const bytes = new Uint8Array(raw);
-      if (bytes.length > 256 * 1024) { close(p, 1009, 'frame_too_large'); return; }
-      if (bytes.length < 8 || bytes[4] !== 255 || bytes[5] !== 216 || bytes.at(-2) !== 255 || bytes.at(-1) !== 217) return this.reject(p, 'invalid_frame');
-      const id = new DataView(raw).getUint32(0, false);
-      if ((d.latest && ((id - d.latest.id) >>> 0) >= 0x80000000) || d.latest?.id === id) return;
-      const frame = { bytes: bytes.subarray(4), id, order: ++d.order, at: Date.now() };
-      const sentAt = performance.now();
-      receiveFrame(d.transport, raw.byteLength, frame.at);
+      if (raw.byteLength > RAW_PACKET_BYTES) { close(p, 1009, 'frame_too_large'); this.cleanup(p, d); return; }
+      const input = parseRawFrame(raw);
+      if (!input) { this.reject(p, 'invalid_raw_frame', true); this.cleanup(p, d); return; }
+      const id = input.id;
+      if (d.inputId !== undefined && (((id - d.inputId) >>> 0) >= 0x80000000 || id === d.inputId)) return;
+      d.inputId = id;
+      const at = Date.now(), order = ++d.order;
+      receiveFrame(d.transport, raw.byteLength, at);
       send(p, 'frame_received', { stream_id: d.stream!, frame_id: id });
-      d.latest = frame; d.frames.set(id, { order: frame.order, at: frame.at });
-      for (const [key, value] of d.frames) if (frame.at - value.at > 3000 || d.frames.size > 16) d.frames.delete(key);
-      for (const viewer of d.viewers) {
-        if (viewer.monitor) continue;
-        if (!viewer.frames.canSend(raw.byteLength, sentAt)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
-        try { viewer.ws.send(raw); viewer.frames.sent(id, raw.byteLength, sentAt); } catch { this.cleanup(viewer, d); }
-      }
+      if (this.rawFrames.put(d.id, { d, p, stream: d.stream!, raw: input, at, order })) d.transport.conversion_dropped++;
+      this.scheduleConversion();
       return;
     }
     if (new TextEncoder().encode(raw).length > 16384) { close(p, 1009, 'message_too_large'); return; }
@@ -344,6 +343,37 @@ export class Room {
       d.tilt = clamp(d.tilt - (primary.y + primary.height / 2 - .5) * .3, -1, 1);
       this.action(d, 'look_at', 'thinking', 500, '興味を示しながら、相手へ視線を向ける');
     }
+  }
+  private scheduleConversion() {
+    if (this.conversionScheduled || !this.rawFrames.size) return;
+    this.conversionScheduled = true;
+    // Yield between encodes so incoming frames can replace a pending frame.
+    setTimeout(async () => {
+      const item = this.rawFrames.take();
+      try {
+        if (!item) return;
+        const { d, p, stream, raw, at, order } = item;
+        if (d.peer !== p || d.stream !== stream || Date.now() - at > RAW_MAX_AGE_MS) { d.transport.conversion_dropped++; return; }
+        const transport = d.transport, started = performance.now(), packet = encodeRawFrame(raw);
+        // Production Workers clocks advance on I/O only. Include a timer yield so
+        // the bounded sample measures encode + scheduler wall time, never fake CPU=0.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        const completed = performance.now();
+        addSample(transport.conversion_ms, completed - started); transport.converted_total++;
+        if (d.peer !== p || d.stream !== stream || d.inputId !== raw.id || Date.now() - at > RAW_MAX_AGE_MS) { transport.conversion_dropped++; return; }
+        transport.published_total++;
+        d.latest = { bytes: packet.subarray(4), id: raw.id, order, at };
+        d.frames.set(raw.id, { order, at });
+        for (const [key, value] of d.frames) if (at - value.at > RAW_MAX_AGE_MS || d.frames.size > 16) d.frames.delete(key);
+        for (const viewer of d.viewers) {
+          if (viewer.monitor) continue;
+          if (!viewer.frames.canSend(packet.byteLength, completed)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
+          try { viewer.ws.send(packet); viewer.frames.sent(raw.id, packet.byteLength, completed); } catch { this.cleanup(viewer, d); }
+        }
+      } catch {
+        if (item) { item.d.transport.conversion_errors++; if (item.d.peer === item.p) this.reject(item.p, 'conversion_failed'); }
+      } finally { this.conversionScheduled = false; this.scheduleConversion(); }
+    }, 0);
   }
   private action(d: Device, action: Action, expression: Motion['expression'], duration_ms: number, display_text = '穏やかな表情で待つ', run?: Pipeline) {
     if (!d.peer) return;

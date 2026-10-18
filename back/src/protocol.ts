@@ -1,4 +1,4 @@
-/** FE / BE / FW wire contract, protocol_version=1. No Worker or Node runtime dependencies.
+/** FE / BE / FW wire contract, viewer protocol_version=1, device protocol_version=2. No Worker or Node runtime dependencies.
  * Timestamps and durations are milliseconds; angles are normalized [-1,1], not degrees.
  * TypeScript types do not validate JSON: use the parsers at the network boundary.
  */
@@ -166,12 +166,10 @@ export type Decision = {
     };
 };
 export interface ServerData {
-    session: {
-        protocol_version: 1;
-        room: string;
-        device_id: string;
-        role: Role;
-    };
+    session: { room: string; device_id: string } & (
+        { protocol_version: 1; role: 'viewer' | 'controller' } |
+        { protocol_version: 2; role: 'device'; frame_format: 'rgb565le-v2'; width: 160; height: 120 }
+    );
     stream: {
         stream_id: string | null;
     };
@@ -309,7 +307,7 @@ export function parseDeviceServerMessage(raw: string): DeviceServerMessage | nul
         return v as DeviceServerMessage;
     if (v.type === 'frame_received' && frame(a))
         return v as DeviceServerMessage;
-    if (v.type === 'session' && a.protocol_version === 1 && a.role === 'device' && typeof a.room === 'string' && typeof a.device_id === 'string')
+    if (v.type === 'session' && a.protocol_version === 2 && a.frame_format === 'rgb565le-v2' && a.width === 160 && a.height === 120 && a.role === 'device' && typeof a.room === 'string' && typeof a.device_id === 'string')
         return v as DeviceServerMessage;
     if (v.type === 'error' && typeof a.code === 'string' && typeof a.message === 'string' && (a.retry_after_ms === undefined || finite(a.retry_after_ms, 0, Number.MAX_SAFE_INTEGER)))
         return v as DeviceServerMessage;

@@ -1,3 +1,5 @@
+import { encodeRawFrame, parseRawFrame } from '../src/raw-frame.ts';
+import sharp from 'sharp';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -5,7 +7,7 @@ import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { once } from 'node:events';
 import WebSocket from 'ws';
-import { syntheticJPEG, Simulator, startGateway } from '../scripts/fw-simulator.mjs';
+import { syntheticJPEG, syntheticRawPacket, Simulator, startGateway } from '../scripts/fw-simulator.mjs';
 const base = 'http://127.0.0.1:8789', origin = 'http://127.0.0.1:8787';
 const active = new Set(); let worker, workerLog = '', cookie, otherCookie, fixture;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -38,7 +40,7 @@ async function rejected(path, headers, status) {
   });
 }
 async function frame(peer, id, device = 'stackchan-01') {
-  const jpeg = await syntheticJPEG(id, device), packet = Buffer.alloc(4 + jpeg.length); packet.writeUInt32BE(id); jpeg.copy(packet, 4); peer.ws.send(packet); return packet;
+  const packet = await syntheticRawPacket(id, device); const expected = Buffer.from(encodeRawFrame(parseRawFrame(packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength)))); peer.ws.send(packet); return expected;
 }
 function detect(stream, id, x = .7) { return { stream_id: stream, frame_id: id, faces: [{ id: 0, x, y: .1, width: .2, height: .3, confidence: .99 }], primary_face_id: 0 }; }
 before(async () => {
@@ -114,13 +116,13 @@ test('viewer cannot control; malformed detection is rejected without steering', 
   control.ws.close(1000); a.ws.close(1000);
 });
 
-test('JPEG size limit and unsigned uint32 rollover', async () => {
+test('raw size limit and unsigned uint32 rollover', async () => {
   await sleep(100);
   const a = await connect('stackchan-02', 'device', 'dev-device-02'), viewer = await connect('stackchan-02');
   await viewer.wait(x => x.type === 'stream');
   await frame(a, 0xffffffff, 'stackchan-02'); await frame(a, 0, 'stackchan-02');
   await viewer.wait(x => Buffer.isBuffer(x) && x.readUInt32BE() === 0);
-  assert.deepEqual(viewer.messages.filter(Buffer.isBuffer).map(x => x.readUInt32BE()), [0xffffffff, 0]);
+  assert.equal(viewer.messages.filter(Buffer.isBuffer).at(-1).readUInt32BE(), 0);
   const closed = once(a.ws, 'close'); a.ws.send(Buffer.alloc(256 * 1024 + 1)); assert.equal((await closed)[0], 1009);
   viewer.ws.close(1000);
 });
@@ -131,13 +133,13 @@ test('slow viewer is disconnected instead of growing an image backlog', async ()
   const device = await connect('stackchan-02', 'device', 'dev-device-02');
   const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/viewer?room=main&device_id=stackchan-02`, { headers: { Origin: origin } });
   active.add(ws); await once(ws, 'open'); const closed = once(ws, 'close');
-  const jpeg = await syntheticJPEG(0, 'stackchan-02');
-  for (let id = 0; id < 121; id++) { const packet = Buffer.alloc(4 + jpeg.length); packet.writeUInt32BE(id); jpeg.copy(packet, 4); device.ws.send(packet); }
+  const raw = await syntheticRawPacket(0, 'stackchan-02');
+  for (let id = 0; id < 121; id++) { const packet = Buffer.from(raw); packet.writeUInt32BE(id, 10); device.ws.send(packet); await sleep(10); }
   assert.equal((await closed)[0], 1013);
   device.ws.close(1000);
 });
 
-test('60fps frames reach a viewer byte-for-byte with 250ms delayed ACKs', async () => {
+test('paced raw frames become exact viewer JPEGs with 250ms delayed ACKs', async () => {
   const device = await connect('stackchan-02', 'device', 'dev-device-02');
   const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/viewer?room=main&device_id=stackchan-02`, { headers: { Origin: origin } });
   active.add(ws); const received = [], sent = [], timers = new Set(); let stream, wasClosed = false;
@@ -149,9 +151,10 @@ test('60fps frames reach a viewer byte-for-byte with 250ms delayed ACKs', async 
   });
   await once(ws, 'open');
   try {
-    const jpeg = await syntheticJPEG(0, 'stackchan-02');
+    const raw = await syntheticRawPacket(0, 'stackchan-02');
     for (let id = 0; id < 60; id++) {
-      const packet = Buffer.alloc(4 + jpeg.length); packet.writeUInt32BE(id); jpeg.copy(packet, 4); sent.push(packet); device.ws.send(packet); await sleep(1000/60);
+      const packet = Buffer.from(raw); packet.writeUInt32BE(id, 10); sent.push(Buffer.from(encodeRawFrame(parseRawFrame(packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength))))); device.ws.send(packet); await sleep(1000/60);
+      for (let i = 0; i < 150 && received.length < sent.length && !wasClosed; i++) await sleep(5);
     }
     for (let i = 0; i < 150 && received.length < sent.length && !wasClosed; i++) await sleep(20);
     assert.equal(wasClosed, false); assert.deepEqual(received, sent);
@@ -245,7 +248,7 @@ test('local demo restart reconnects both FW clients with new streams', async () 
   const va = await connect('stackchan-01'), vb = await connect('stackchan-02');
   const clients = new Map(); let gateway;
   for (const [id, token] of [['stackchan-01', 'dev-device-01'], ['stackchan-02', 'dev-device-02']]) {
-    clients.set(id, new Simulator({ base, id, token, sharedImage: true, notify: event => gateway?.notify(event) }));
+    clients.set(id, new Simulator({ base, id, token, fps: 4, sharedImage: true, notify: event => gateway?.notify(event) }));
   }
   gateway = startGateway(clients, { port: 8791, origin });
   for (const sim of clients.values()) sim.start();
@@ -319,4 +322,47 @@ test('FE receives every valid frame above 2 FPS independently of the AI evaluati
   assert.equal(stats.data.transport.frames_received,8);assert.ok(stats.data.transport.received_fps>2);
   assert.equal(stats.data.pacing.evaluation_interval_ms,2000);
   viewer.ws.close(1000);device.ws.close(1000);
+});
+
+
+test('device v2 contract rejects every malformed raw header and legacy JPEG upload',async()=>{
+ const valid=await syntheticRawPacket(0);
+ const invalid=[];
+ for(const offset of [0,4,5,6,8,14]){const packet=Buffer.from(valid);packet[offset]^=1;invalid.push(packet);}
+ invalid.push(valid.subarray(0,valid.length-1),Buffer.concat([valid,Buffer.from([0])]),Buffer.from([0,0,0,0,255,216,255,217]));
+ for(const packet of invalid){
+  const device=await connect('stackchan-02','device','dev-device-02');
+  const session=(await device.wait(m=>m.type==='session')).data;
+  assert.deepEqual(session,{protocol_version:2,frame_format:'rgb565le-v2',width:160,height:120,room:'main',device_id:'stackchan-02',role:'device'});
+  const closed=once(device.ws,'close');device.ws.send(packet);const [code]=await closed;
+  assert.equal(code,packet.length>38416?1009:1008);
+ }
+});
+test('raw bursts retain latest frame, bounded conversion metrics and valid JPEG output',async()=>{
+ const device=await connect('stackchan-02','device','dev-device-02'),viewer=await connect('stackchan-02');
+ const raw=await syntheticRawPacket(0);
+ try {
+  for(let id=0;id<200;id++){const p=Buffer.from(raw);p.writeUInt32BE(id,10);device.ws.send(p);}
+  const last=await viewer.wait(m=>Buffer.isBuffer(m)&&m.readUInt32BE()===199);
+  const metadata=await sharp(last.subarray(4)).metadata();assert.equal(metadata.width,160);assert.equal(metadata.height,120);
+  await sleep(1100);viewer.send('telemetry_request',{});
+  const t=(await viewer.wait(m=>m.type==='telemetry_snapshot'&&m.data.transport.frames_received===200)).data.transport;
+  assert.equal(t.input_format,'rgb565le-v2');assert.equal(t.bytes_received,200*38416);
+  assert.ok(t.conversion.dropped_total>0);assert.ok(t.conversion.count<=120);assert.ok(t.conversion.published_total<200);assert.equal(t.conversion.errors,0);
+  assert.equal(t.conversion.timing,'encode_and_yield_wall_ms');
+ }finally{viewer.ws.close(1000);device.ws.close(1000);}
+});
+
+
+test('queued raw frames from a replaced connection cannot enter the next stream',async()=>{
+ const old=await connect('stackchan-02','device','dev-device-02'),viewer=await connect('stackchan-02');
+ const first=(await viewer.wait(m=>m.type==='stream'&&m.data.stream_id)).data.stream_id;
+ const raw=await syntheticRawPacket(0);
+ for(let id=100;id<200;id++){const p=Buffer.from(raw);p.writeUInt32BE(id,10);old.ws.send(p);}
+ const next=await connect('stackchan-02','device','dev-device-02');
+ try {
+  const stream=await viewer.wait(m=>m.type==='stream'&&m.data.stream_id&&m.data.stream_id!==first);
+  const boundary=viewer.messages.indexOf(stream);await frame(next,0);await viewer.wait(m=>viewer.messages.indexOf(m)>boundary&&Buffer.isBuffer(m)&&m.readUInt32BE()===0);
+  await sleep(100);assert.deepEqual(viewer.messages.slice(boundary+1).filter(Buffer.isBuffer).map(p=>p.readUInt32BE()),[0]);
+ }finally{next.ws.close(1000);viewer.ws.close(1000);}
 });

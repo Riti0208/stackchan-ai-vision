@@ -4,6 +4,8 @@
 FW / BE / FEの3名で開発する。既存URLを維持し、Decisionsによる個体別の感情更新と、笑顔以外の表情観察を追加した。
 共有する通信型は[`back/src/protocol.ts`](../back/src/protocol.ts)に集約し、BE・FWシミュレーターで共有する。実装用の型・認証・接続順は[通信仕様 v1.7](communication_protocol_v1.md)を正とする。
 
+デバイス映像入力は[raw v2仕様](raw_camera_transport_v2.md)と[通信契約](communication_protocol_v1.md)に従う。FWがJPEG化せず、BEが160×120 rawをJPEGへ変換する。viewer/AI出力はJPEGを維持する。BE公開とFW更新の間、旧FWはofflineとなる。
+
 ## 1. 目指す体験
 
 **スタックチャンがカメラで見た出来事を受け止め、自分の感情と意向を持って行動する。**
@@ -33,16 +35,16 @@ FW / BE / FEの3名で開発する。既存URLを維持し、Decisionsによる�
 
 | 領域 | 技術 / 責務 |
 |---|---|
-| FW | M5Stack公式StackChan、Arduino/C++、撮影/JPEG化、WSS、首・LCD、物理的な角度/速度制限 |
-| BE | Cloudflare Workers + room単位のDurable Objects、接続/認証、個体の内面、会話配送、外部AI、動作の確定 |
+| FW | M5Stack公式StackChan、Arduino/C++、160×120 RGB565撮影・raw v2送信、WSS、首・LCD、物理的な角度/速度制限 |
+| BE | Cloudflare Workers + room単位のDurable Objects、接続/認証、RGB565→JPEG変換、個体の内面、会話配送、外部AI、動作の確定 |
 | FE | React + Vite、映像、MediaPipe Face Detector、顔枠、本音/建前、会話、感情・判断履歴 |
 | AI | OpenAI Decisions APIで画像のpredicate評価、見える表情のchoice、個体の感情のscore、意向のchoiceを評価。GPT-6 Luna Responses APIで本音・会話文を生成 |
 | ローカル補助 | NodeのFWシミュレーター、BE配下の確認画面。front/とfw/の代替となる接続例 |
 
 ```text
-本体A ── JPEG/status ──┐                 ┌── 本体Aの内面・意向 ── 表現 ── action → 本体A
+本体A ── RGB565 v2/status ──┐                 ┌── 本体Aの内面・意向 ── 表現 ── action → 本体A
                       ├── roomのBE ────┤           │
-本体B ── JPEG/status ──┘                 └── 本体Bの内面・意向 ── 表現 ── action → 本体B
+本体B ── RGB565 v2/status ──┘                 └── 本体Bの内面・意向 ── 表現 ── action → 本体B
                                                     ↑↓ 公開した言葉だけを配送
                                            FE: 本音・建前・会話を観察
 ```
@@ -283,7 +285,7 @@ FEの再接続には履歴を表示用に再配信する。履歴はロボット
 
 | 担当 | 送信 | 受信 / 実装 |
 |---|---|---|
-| FW | JPEG Binary、device_status | session、action。内面や会話は受け取らない |
+| FW | RGB565LE raw v2 Binary、device_status | session、action。内面や会話は受け取らない |
 | FE | frame_ack、制御接続のみdetection/heartbeat | 映像・emotion・decision・device_status・mind・behavior・dialogue・dialogue_history |
 | BE | 各本体へのactionとFEへのイベント | 認証・デバイス分離・内面更新・会話配送・表現の確定 |
 
@@ -297,7 +299,7 @@ behavior=nullは現在の発行動作がない状態。stream切り替え時は�
 外部API不要のmock観察と、同じ内面/会話/表現処理を使う。会話は画面の固定タイマーではなく、
 BEの個体状態と受信メッセージから発生する。実APIの精度・遅延を検証したものではない。
 mockは観察・感情・文章を模擬出力する。性格と体験による差を外部APIなしで確認でき、実モデルの出力とは表示しない。
-`npm run demo -- --same-image`または`npm run demo:openai -- --same-image`で2台に同じ合成JPEGを送れる。
+`npm run demo -- --same-image`または`npm run demo:openai -- --same-image`で2台に同じ合成画像のRGB565LE raw v2を送れる。
 `npm run demo:openai`を明示実行した場合だけ、Decisions＋Luna Responsesの実APIセッションを開始する。
 既定は起動から60秒 / 全ルーム・全個体合計30リクエスト。DecisionsとResponsesの失敗・タイムアウトも合算する。
 期限切れまたは回数上限でBEの新規送信を禁止し、ローカルデモも停止する。期限で進行中の通信も中断する。

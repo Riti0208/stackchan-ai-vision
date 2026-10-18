@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { once } from 'node:events';
 import WebSocket from 'ws';
-import { syntheticJPEG } from '../scripts/fw-simulator.mjs';
+import { syntheticRawPacket } from '../scripts/fw-simulator.mjs';
 import { prepareOpenAIConfig } from '../scripts/local-env.mjs';
 const base = 'http://127.0.0.1:8792', origin = 'http://127.0.0.1:8787';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -29,7 +29,7 @@ async function pump(peers) {
   const send = async () => {
     const id = frameId++;
     for (const peer of peers) {
-      const jpeg = await syntheticJPEG(id), bytes = Buffer.alloc(jpeg.length + 4); bytes.writeUInt32BE(id); jpeg.copy(bytes, 4);
+      const bytes = await syntheticRawPacket(id);
       if (peer.ws.readyState === 1) { peer.ws.send(bytes); peer.ws.send(JSON.stringify({ timestamp: Date.now(), type: 'device_status', data: { online: true, fps: 2, wifi_rssi: null, battery: null, current_action: 'idle' } })); }
     }
   };
@@ -73,6 +73,13 @@ test('Responses-generated private thoughts and public dialogue reach the correct
     assert.deepEqual((await b.wait(x => x.type === 'action' && x.data.seq === outward.command.seq)).data, outward.command);
     await va.wait(x => x.type === 'mind' && x.data.cause.message_id === reply.id, 10000);
     const calls = await records('main'), texts = calls.filter(r => r.endpoint === 'responses');
+    const images = calls.flatMap(r => r.body.input?.[0]?.content || []).filter(c => c.type === 'input_image');
+    assert.ok(images.length > 0);
+    for (const image of images) {
+      assert.match(image.image_url, /^data:image\/jpeg;base64,/);
+      const bytes = Buffer.from(image.image_url.split(',')[1], 'base64');
+      assert.equal(bytes.readUInt16BE(), 0xffd8); assert.equal(bytes.readUInt16BE(bytes.length - 2), 0xffd9);
+    }
     const choices = texts.map(r => JSON.parse(r.body.input[1].content).selected_choice);
     for (const type of ['greet:', 'reply:', 'listen:']) assert.equal(choices.filter(c => c.startsWith(type)).length, 1, `one ${type} generation`);
     assert.ok(texts.filter(r => !JSON.parse(r.body.input[1].content).human_action).length <= 4, 'ordinary reactions remain bounded; new human events are counted separately');
@@ -315,7 +322,7 @@ test('personal emotion, thought, experience and relationship memory survive reco
   assert.equal(restoredMemory.first_join_at, memory.first_join_at);
   assert.equal(restoredMemory.total_experiences, memory.total_experiences);
   assert.equal((await restored.wait(m => m.type === 'behavior')).data, null);
-  const jpeg = await syntheticJPEG(0), bytes = Buffer.alloc(jpeg.length + 4); bytes.writeUInt32BE(0); jpeg.copy(bytes, 4); restoredFW.ws.send(bytes);
+  const bytes = await syntheticRawPacket(0); restoredFW.ws.send(bytes);
   await restored.wait(m => m.type === 'decision');
   const evaluation = (await records('identity')).find(r => r.endpoint === 'decisions' && r.body.questions[0].type === 'predicate');
   const context = JSON.parse(evaluation.body.input[0].content[0].text.split('\n').at(-1));

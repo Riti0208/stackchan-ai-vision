@@ -189,10 +189,14 @@ async function startCamera(d) {
     d.media = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false });
     const video = document.createElement('video'); video.srcObject = d.media; video.muted = true; video.playsInline = true; await video.play();
     const ws = d.cameraWS = new WebSocket(`ws://127.0.0.1:8790/camera?device_id=${encodeURIComponent(d.id)}`);
-    const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 240;
+    const canvas = document.createElement('canvas'); canvas.width = 160; canvas.height = 120;
     ws.onopen = () => {
       $('#detection').value = 'manual'; $('.camera-start', d.root).hidden = true; $('.camera-stop', d.root).hidden = false;
-      d.cameraTimer = setInterval(() => { if (ws.readyState !== 1 || ws.bufferedAmount > 256 * 1024) return; canvas.getContext('2d').drawImage(video, 0, 0, 320, 240); canvas.toBlob(blob => { if (blob && ws.readyState === 1) ws.send(blob); }, 'image/jpeg', .7); }, 1000 / captureFPS);
+      d.cameraTimer = setInterval(() => { if (ws.readyState !== 1 || ws.bufferedAmount > 256 * 1024) return; const ctx = canvas.getContext('2d'); ctx.drawImage(video, 0, 0, 160, 120);
+        const rgba = ctx.getImageData(0, 0, 160, 120).data, packet = new Uint8Array(38416), v = new DataView(packet.buffer);
+        packet.set([83,67,70,87,2,1]); v.setUint16(6,160); v.setUint16(8,120);
+        for (let i=0,j=16;i<rgba.length;i+=4,j+=2) v.setUint16(j,((rgba[i]>>3)<<11)|((rgba[i+1]>>2)<<5)|(rgba[i+2]>>3),true);
+        ws.send(packet); }, 1000 / captureFPS);
     };
     ws.onerror = () => { $('#notice').textContent = 'ローカルカメラブリッジに接続できません。'; stopCamera(d); };
     ws.onclose = () => stopCamera(d);

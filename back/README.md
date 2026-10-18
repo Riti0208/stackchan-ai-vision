@@ -1,7 +1,7 @@
 # StackChan backend / local E2E lab
 
 Cloudflare Workers + Durable Objectsで動くBEと、同じ通信契約を使うFW相当クライアント。
-`front/`と`fw/`の実装を待たずに、JPEG中継・検出入力・感情更新・action受信をローカルで確認する。
+`front/`と`fw/`の実装を待たずに、RGB565 v2受信・JPEG変換/中継・検出入力・感情更新・action受信をローカルで確認する。
 
 ## 起動
 
@@ -18,7 +18,7 @@ npm run demo
 初回だけ`.dev.vars.example`を`.dev.vars`へコピーし、次をまとめて起動する。
 
 - Workers / Durable Objectsローカル実行: 127.0.0.1:8787
-- FWシミュレーター2台: 同じmain room、stackchan-01 / stackchan-02、320×240 / 60fps
+- FWシミュレーター2台: 同じmain room、stackchan-01 / stackchan-02、160×120 RGB565LE / 目標60fps
 - ローカルのFW受信モニターとカメラブリッジ: 127.0.0.1:8790
 
 「制御トークン」に`.dev.vars`内のmainのcontrol_tokenを入力する。
@@ -54,7 +54,7 @@ mockは固定の観察値から新しいアクションを検出する。実API�
 
 各本体の「カメラを映像源にする」を押し、ブラウザのカメラ利用を許可する。
 映像はブラウザ → ローカルNodeブリッジ → FW認証付きWS → ローカルBE → viewerの順に流れる。
-音声は取得しない。ブラウザ内のJPEG化は320×240 / 60fps。Node側が4バイトヘッダーを付与する。
+音声は取得しない。ブラウザが160×120 RGB565LE raw v2を生成し、NodeがFW用frame IDを付ける。JPEG化はBEで行う。目標60fpsは転送性能の保証ではない。
 カメラトークンをFEに渡さず、FWのBearer認証経路をそのまま使う。
 「合成映像に戻す」でカメラを停止する。ブラウザを閉じてもカメラを停止する。
 
@@ -73,7 +73,7 @@ DEVICE_TOKEN=dev-device-01 npm run sim -- --device stackchan-01 --frames /absolu
 ```
 
 `--image`は1枚を繰り返す。`--frames`はディレクトリ内のJPEGを名前順に繰り返す。
-未指定なら動く合成顔のJPEGを生成。`--fps`は0超〜60（既定60）。
+未指定なら動く合成顔を生成。画像ファイルと合成顔はローカルで160×120 RGB565LEに変換して送る。`--fps`は0超〜60（既定60）。
 `--base https://<worker-domain>`で公開BEにも同じクライアントを接続できる。
 `--room`も指定可能。実トークンは環境変数で渡し、Gitやコマンド履歴へ直接書かない。
 通常のCLIクライアントはactionを標準出力へ表示する。ローカルモニター/カメラブリッジは`npm run demo`の機能。
@@ -83,7 +83,8 @@ DEVICE_TOKEN=dev-device-01 npm run sim -- --device stackchan-01 --frames /absolu
 [通信仕様](../doc/communication_protocol_v1.md)を参照。
 
 - 本体ごとに独立したWS。FWはBearer、制御FEはHttpOnly Cookieで認証する。
-- JPEGは`[uint32 BE frame_id][JPEG]`。再接続ごとにstream_idを更新する。
+- FW入力は`SCFW` 16-byteヘッダー＋160×120 RGB565LE（全長38416 bytes）。session v2/format/寸法を検証してから送信し、旧JPEG入力を拒否する。
+- viewer出力はBE生成JPEGの`[uint32 BE frame_id][JPEG]`。再接続ごとにstream_idを更新する。
 - FEは`session`/`stream`受信後に描画し、受信フレームごとに`frame_ack`を返す。
 - controllerのみ`detection`を送信し、5秒ごとに`heartbeat`を送る。
 - FWはactionの古いseqを無視し、5秒ごとにdevice_statusを送る。
@@ -415,3 +416,13 @@ CLI方式の`PAID_SESSION_ID`等はモニター制御が無効な環境で引き
 モニターの「OpenAI APIの呼び出し」には、開始時刻・個体・処理段階・実行中/完了・HTTP状態・RTT・
 入力/出力トークン数・request IDを直近100件まで表示する。`api_activity`の開始/完了を購読し、
 再接続時は保持されたtelemetry_snapshotで履歴を補完する。画像・プロンプト・キーは表示しない。
+
+
+## Raw v2の検証と公開手順
+
+原要求は[raw camera spec](../doc/raw_camera_transport_v2.md)、実装境界・メトリクス・負荷計測は[検証記録](../doc/raw_camera_transport_v2_validation.md)を参照。
+`npm run test:unit`、`npm run test:e2e`は外部OpenAIを呼ばない。`node scripts/benchmark-raw.mjs`はローカルworkerdで単色・勾配・ノイズ各1000枚のencoder時間・Inspector観測ヒープ・検証用bundleサイズをJSON出力する。
+encoderはjpeg-js 0.4.4のBSDライセンスを保持した純JS adapter。`node scripts/vendor-jpeg-encoder.mjs`で固定依存ソースから再生成する。NodeのBuffer/DOM/ネイティブJPEG encoderをWorkerでは使わない。
+RGBA 76800 bytesとencoderの表をisolateで再利用する。roomごとに変換中1枚＋デバイスごとに最新raw 1枚だけを保持し、raw変換の破棄とviewer ACK窓による切断を別々に扱う。
+
+BEデプロイとv2 FW書き込みを協調する。**BE公開後〜FW更新完了までは旧FWはofflineとなる**。旧JPEG fallbackはない。rawは38.4KB/枚で、60fpsには約18.44Mbps/台（通信オーバーヘッド別）が必要。実機のfps/転送時間/変換時間/破棄数/CPUを比較してから性能改善を案内する。
