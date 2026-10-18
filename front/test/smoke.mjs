@@ -149,9 +149,17 @@ try {
       document.querySelector(".viewport-bottom")?.textContent !== first,
     first,
   );
+  // UI updates and image ACKs arrive independently. Wait for the fifth ACK
+  // itself so slower evaluation/CI scheduling cannot race this assertion.
+  const ackDeadline = performance.now() + 10000;
+  while (
+    sent.filter((m) => m.type === "frame_ack").length < 5 &&
+    performance.now() < ackDeadline
+  )
+    await sleep(100);
   assert.ok(
     sent.filter((m) => m.type === "frame_ack").length >= 5,
-    "images ACKed beyond the four-frame backpressure limit",
+    "viewer continuously ACKs at least five images within 10 seconds",
   );
   assert.equal(sockets, 1, "viewer stays connected; no reconnect loop");
   assert.ok(

@@ -37,14 +37,29 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:e2e
       - run: npm run build
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-shell-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('front/package-lock.json') }}
       - name: Install browser for frontend integration check
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
         working-directory: front
       - name: Verify frontend with isolated mock backend
         run: npm run test:smoke
         working-directory: front
-      - name: Deploy existing Worker
-        run: npm run deploy
+      - name: Deploy existing Worker with verified frontend assets
+        # Keep the normal local deploy build hook; CI already built and smoke-tested
+        # front/dist. Write beside wrangler.jsonc to preserve relative paths.
+        run: |
+          trap 'rm -f .wrangler-ci.json' EXIT
+          node --input-type=module <<'JS'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const config = JSON.parse(await readFile('wrangler.jsonc', 'utf8'));
+          delete config.build;
+          await writeFile('.wrangler-ci.json', JSON.stringify(config));
+          JS
+          npm run deploy -- --config .wrangler-ci.json
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
