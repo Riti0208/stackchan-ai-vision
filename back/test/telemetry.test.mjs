@@ -17,5 +17,5 @@ test('received FPS is computed from ingress samples, independently of API interv
  const out=snapshot(h,t,pacing({STREAM_FPS:'4',EVAL_INTERVAL_MS:'1500'}),2000);assert.equal(out.transport.received_fps,4);assert.equal(out.transport.frame_interval.p50_ms,250);assert.equal(out.pacing.evaluation_interval_ms,1500);assert.equal(out.stages.perception.count,0);
 });
 test('pacing is bounded and invalid or missing configuration uses known defaults',()=>{
- assert.deepEqual(pacing({STREAM_FPS:'-3',EVAL_INTERVAL_MS:'NaN',NARRATION_INTERVAL_MS:'0'}),pacing({}));assert.equal(pacing({STREAM_FPS:'4'}).stream_fps,4);assert.equal(pacing({EVAL_INTERVAL_MS:'500'}).evaluation_interval_ms,500);
+ assert.deepEqual(pacing({STREAM_FPS:'-3',EVAL_INTERVAL_MS:'NaN',NARRATION_INTERVAL_MS:'0'}),pacing({}));assert.equal(pacing({}).stream_fps,60);assert.equal(pacing({}).evaluation_interval_ms,1000);assert.equal(pacing({STREAM_FPS:'60'}).stream_fps,60);assert.equal(pacing({STREAM_FPS:'61'}).stream_fps,60);assert.equal(pacing({STREAM_FPS:'4'}).stream_fps,4);assert.equal(pacing({EVAL_INTERVAL_MS:'500'}).evaluation_interval_ms,500);
 });

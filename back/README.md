@@ -18,7 +18,7 @@ npm run demo
 初回だけ`.dev.vars.example`を`.dev.vars`へコピーし、次をまとめて起動する。
 
 - Workers / Durable Objectsローカル実行: 127.0.0.1:8787
-- FWシミュレーター2台: 同じmain room、stackchan-01 / stackchan-02、320×240 / 2fps
+- FWシミュレーター2台: 同じmain room、stackchan-01 / stackchan-02、320×240 / 60fps
 - ローカルのFW受信モニターとカメラブリッジ: 127.0.0.1:8790
 
 「制御トークン」に`.dev.vars`内のmainのcontrol_tokenを入力する。
@@ -54,7 +54,7 @@ mockは固定の観察値から新しいアクションを検出する。実API�
 
 各本体の「カメラを映像源にする」を押し、ブラウザのカメラ利用を許可する。
 映像はブラウザ → ローカルNodeブリッジ → FW認証付きWS → ローカルBE → viewerの順に流れる。
-音声は取得しない。ブラウザ内のJPEG化は320×240 / 2fps。Node側が4バイトヘッダーを付与する。
+音声は取得しない。ブラウザ内のJPEG化は320×240 / 60fps。Node側が4バイトヘッダーを付与する。
 カメラトークンをFEに渡さず、FWのBearer認証経路をそのまま使う。
 「合成映像に戻す」でカメラを停止する。ブラウザを閉じてもカメラを停止する。
 
@@ -73,7 +73,7 @@ DEVICE_TOKEN=dev-device-01 npm run sim -- --device stackchan-01 --frames /absolu
 ```
 
 `--image`は1枚を繰り返す。`--frames`はディレクトリ内のJPEGを名前順に繰り返す。
-未指定なら動く合成顔のJPEGを生成。`--fps`は0超〜10（既定2）。
+未指定なら動く合成顔のJPEGを生成。`--fps`は0超〜60（既定60）。
 `--base https://<worker-domain>`で公開BEにも同じクライアントを接続できる。
 `--room`も指定可能。実トークンは環境変数で渡し、Gitやコマンド履歴へ直接書かない。
 通常のCLIクライアントはactionを標準出力へ表示する。ローカルモニター/カメラブリッジは`npm run demo`の機能。
@@ -335,15 +335,14 @@ status/usageが不明な失敗はnull。失敗は請求額を確定できない�
 back/.dev.varsへ任意で設定してデモを起動し直す。OpenAI用の一時設定にもこれら3項目だけを明示的に引き継ぐ。
 
 ```dotenv
-STREAM_FPS="2"
-EVAL_INTERVAL_MS="2000"
+STREAM_FPS="60"
+EVAL_INTERVAL_MS="1000"
 NARRATION_INTERVAL_MS="2000"
 ```
 
-STREAM_FPSは1〜10（demoは範囲外の設定を起動時に拒否）、判断間隔は500〜10000ms、本音生成間隔は1000〜30000ms。既定値は上記。
-まず2fps/2000msを記録し、次にSTREAM_FPSだけ4へ変更して、API呼び出しを増やさず表示を滑らかにできるか比較する。
+STREAM_FPSは1〜60（demoは範囲外の設定を起動時に拒否）、判断間隔は500〜10000ms、本音生成間隔は1000〜30000ms。既定値は上記。
+60fpsを上限目標に映像を送り、AI判断は最大1回/秒に保つ。実際の受信FPSはカメラ・JPEG変換・Wi-Fiの制約を受け、計測パネルの受信値で確認する。実FWのfps設定はFW側にも適用する。BEが勝手にFW送信レートを変える機能や、最適値の自動決定は追加していない。
 その後に判断間隔を変更し、APIのp95・エラー/タイムアウト・画像の古さ・破棄数を比較する。
-実FWのfps設定はFW側にも適用する。BEが勝手にFW送信レートを変える機能や、最適値の自動決定は追加していない。
 
 frame_receivedとaction_ackに対応したローカルFWシミュレーターで通信RTTを計測する。実FWがACKに未対応なら該当欄は未計測。
 BE画像受信→FW受信ACKは撮影開始→モーター完了の時間ではない。FE受信ACKも描画前であり、GPU描画時間とは区別する。

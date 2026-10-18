@@ -336,7 +336,12 @@ void loop() {
   if (now - metricsAt >= 5000) {
     metricsAt = now;
     auto m = stackchan_fw::uploadMetrics();
-    Serial.printf("STAGE6 upload_fps=%.2f sent=%u dropped=%u send_ms=%u action=%s expression=%s heap=%u psram_free=%u\n",
+    Serial.printf("STAGE6 wifi=%s rssi=%d wss=%s session=%s ws_connections=%u upload_fps=%.2f sent=%u dropped=%u send_ms=%u action=%s expression=%s heap=%u psram_free=%u\n",
+                  WiFi.status() == WL_CONNECTED ? "online" : "offline",
+                  WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
+                  stackchan_fw::wssConnected() ? "online" : "offline",
+                  stackchan_fw::wssSessionReady() ? "ready" : "waiting",
+                  stackchan_fw::wssConnectionCount(),
                   m.fpsMilli / 1000.0f, m.sent, m.dropped, m.lastSendMs,
                   stackchan_fw::actionName(behavior.action()),
                   behavior.expression() == stackchan_fw::Expression::Neutral ? "neutral" :

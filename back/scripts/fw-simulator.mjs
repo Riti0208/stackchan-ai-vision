@@ -32,9 +32,9 @@ export class Simulator {
   /** @type {WebSocket | null} */ cameraPeer = null;
   sending = false;
   /** @param {SimulatorOptions} options */
-  constructor({ base = 'http://127.0.0.1:8787', room = 'main', id = 'stackchan-01', token, fps = 2, files = [], sharedImage = false, notify = () => {} }) {
+  constructor({ base = 'http://127.0.0.1:8787', room = 'main', id = 'stackchan-01', token, fps = 60, files = [], sharedImage = false, notify = () => {} }) {
     this.base = base; this.room = room; this.id = id; this.token = token; this.fps = fps; this.files = files; this.sharedImage = sharedImage; this.notify = notify;
-    if (!Number.isFinite(fps) || fps <= 0 || fps > 10) throw new Error('fps must be > 0 and <= 10');
+    if (!Number.isFinite(fps) || fps <= 0 || fps > 60) throw new Error('fps must be > 0 and <= 60');
     this.frame = 0; this.lastSeq = 0; this.frameSentAt = new Map();
     /** @type {number | null} */ this.uploadRTT = null;
     /** @type {Pick<Motion, 'action' | 'pan' | 'tilt' | 'expression'>} */ this.action = { action: 'idle', pan: 0, tilt: 0, expression: 'neutral' };
@@ -159,6 +159,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   if (option('frames') && !files.length) throw new Error('No JPEG files in --frames directory');
   const token = process.env.DEVICE_TOKEN;
   if (!token) throw new Error('Set DEVICE_TOKEN in the environment; do not place tokens in command-line arguments');
-  const sim = new Simulator({ base: option('base'), room: option('room'), id: option('device'), token, fps: Number(option('fps') || 2), files, notify: event => { if (event.type !== 'sim_frame') console.log(JSON.stringify(event)); } });
+  const sim = new Simulator({ base: option('base'), room: option('room'), id: option('device'), token, fps: Number(option('fps') || 60), files, notify: event => { if (event.type !== 'sim_frame') console.log(JSON.stringify(event)); } });
   sim.start(); process.on('SIGINT', () => sim.stop()); process.on('SIGTERM', () => sim.stop());
 }

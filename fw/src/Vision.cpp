@@ -8,7 +8,9 @@ namespace {
 uint8_t* thumbnail=nullptr;
 uint32_t lastCapture=0,lastAdapt=0,lastSent=0,lastDropped=0,encodeMs=0;
 int quality=60;
-uint32_t period=500;
+// Target roughly 60 fps; the adaptive fallback reduces quality, then rate,
+// then resolution if JPEG encoding or WebSocket transmission cannot keep up.
+uint32_t period=17;
 bool small=false;
 unsigned badWindows=0,encodeFailures=0;
 struct Sink { FrameLease lease; size_t length=0; bool overflow=false; };
@@ -56,10 +58,10 @@ void adaptVision(uint32_t now) {
   if(badWindows<2) return;
   badWindows=0;
   if(quality>30) quality-=15;
-  else if(period==500) period=1000;
+  else if(period==17) period=1000;
   else if(!small && thumbnail) small=true;
   else return;
-  Serial.printf("VISION pressure fallback quality=%d fps_target=%d size=%s\n",quality,period==500?2:1,small?"160x120":"320x240");
+  Serial.printf("VISION pressure fallback quality=%d fps_target=%d size=%s\n",quality,period==17?60:1,small?"160x120":"320x240");
 }
 }
 #endif

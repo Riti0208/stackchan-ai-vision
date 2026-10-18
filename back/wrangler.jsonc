@@ -23,7 +23,10 @@
     "AI_MODE": "mock",
     "ENABLE_LAB": "false",
     "ENABLE_PAID_CONTROL": "true",
-    "PAID_CONTROL_ROOM": "main"
+    "PAID_CONTROL_ROOM": "main",
+    "STREAM_FPS": "60",
+    "EVAL_INTERVAL_MS": "1000",
+    "NARRATION_INTERVAL_MS": "2000"
   },
   "assets": {
     "directory": "../front/dist",

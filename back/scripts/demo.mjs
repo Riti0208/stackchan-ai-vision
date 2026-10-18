@@ -15,8 +15,8 @@ if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && 
 const config = JSON.parse(value);
 const useOpenAI = process.argv.includes('--openai');
 const local = await readLocalVars();
-const fps = Number(local.STREAM_FPS || 2);
-if (!Number.isFinite(fps) || fps < 1 || fps > 10) throw new Error('STREAM_FPS must be between 1 and 10');
+const fps = Number(local.STREAM_FPS || 60);
+if (!Number.isFinite(fps) || fps < 1 || fps > 60) throw new Error('STREAM_FPS must be between 1 and 60');
 try { const existing = await fetch('http://127.0.0.1:8787/health', { signal: AbortSignal.timeout(500) }); if (existing.ok) throw new Error('DEMO_PORT_IN_USE'); } catch (error) { if (error.message === 'DEMO_PORT_IN_USE') throw new Error('Port 8787 is already in use. Stop the existing demo first.'); }
 const prepared = useOpenAI ? await prepareOpenAIConfig(local, limits) : await prepareMockConfig(local);
 const wrangler = spawn(process.execPath, ['node_modules/wrangler/bin/wrangler.js', 'dev', '--config', prepared?.path || 'wrangler.local.jsonc', '--ip', '127.0.0.1', '--port', '8787', '--persist-to', resolve('.wrangler/state')], { stdio: 'inherit', env: { ...process.env, WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG_PATH: '.wrangler/logs/demo.log' } });

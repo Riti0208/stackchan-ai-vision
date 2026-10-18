@@ -8,10 +8,12 @@ actions, moves the neck within small limits, and draws the selected expression.
 ## What the firmware does
 
 - Captures the GC0308 camera at QVGA RGB565, converts frames to JPEG in PSRAM,
-  and initially uploads at 320x240 and 2 fps with a 32-bit big-endian frame ID.
+  and targets 320x240 at 60 fps with a 32-bit big-endian frame ID.
+- Actual upload FPS depends on camera capture, JPEG encoding, and Wi-Fi; the
+  serial `upload_fps` field reports the measured rate.
 - Keeps only the newest unsent frame. Frames older than one second or from an
   earlier connection are discarded. Sustained pressure lowers JPEG quality,
-  then frame rate, then resolution.
+  then falls back to 1 fps, then lowers resolution.
 - Sends `device_status` every five seconds with measured upload FPS, Wi-Fi RSSI,
   and current action. Battery is `null` because the camera owns the shared I2C bus.
 - Accepts newer action sequence numbers only. Pan is limited to ±30 degrees,

@@ -1,6 +1,6 @@
 const $ = (s, parent = document) => parent.querySelector(s);
 const devices = new Map();
-let captureFPS = 2;
+let captureFPS = 60;
 const dialogueSeen = new Set();
 const personalityLabels = { curious: '好奇心旺盛', shy: '照れ屋', cheerful: '陽気', calm: 'おっとり', cautious: '慎重', playful: 'いたずら好き' };
 const humanChangeLabels = { person_appeared: '人が現れた', person_left: '人が見えなくなった', hand_raised: '手を上げた', smile_started: '笑顔になった', frown_started: '眉をひそめた', eyes_widened: '目を見開いた', mouth_opened: '口を開いた', tears_appeared: '涙が見えた', looked_at_robot: 'こちらを向いた' };
@@ -29,6 +29,7 @@ function log(id, type, detail) {
 }
 function createDevice(id) {
   const root = $('#device-template').content.firstElementChild.cloneNode(true); $('.device-id', root).textContent = id; root.dataset.device = id;
+  $('.source-label', root).textContent = `JPEG / target ${captureFPS} FPS`;
   const source = document.createElement('small'); source.className = 'text-source'; source.textContent = '本音の生成待ち'; $('.inner', root).append(source);
   for (const [key, label] of Object.entries(labels)) { const row = document.createElement('div'); row.className = 'emotion'; row.innerHTML = `<span>${label}</span><div class="track"><div class="fill"></div></div><output>0%</output>`; row.dataset.emotion = key; $('.emotions', root).append(row); }
   const perception = document.createElement('p'); perception.className = 'observation-text'; perception.textContent = 'カメラの表情: 観察待ち'; $('.telemetry', root).after(perception);

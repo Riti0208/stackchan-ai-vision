@@ -23,7 +23,7 @@ export function receiveFrame(transport: Transport, bytes: number, at: number) {
 }
 export function pacing(env: { STREAM_FPS?: string; EVAL_INTERVAL_MS?: string; NARRATION_INTERVAL_MS?: string }) {
   const number = (v: string | undefined, fallback: number, min: number, max: number) => v?.trim() && Number.isFinite(Number(v)) && Number(v)>=min && Number(v)<=max ? Number(v) : fallback;
-  return { stream_fps: number(env.STREAM_FPS, 2, 1, 10), evaluation_interval_ms: number(env.EVAL_INTERVAL_MS, 2000, 500, 10000), narration_interval_ms: number(env.NARRATION_INTERVAL_MS, 2000, 1000, 30000) };
+  return { stream_fps: number(env.STREAM_FPS, 60, 1, 60), evaluation_interval_ms: number(env.EVAL_INTERVAL_MS, 1000, 500, 10000), narration_interval_ms: number(env.NARRATION_INTERVAL_MS, 2000, 1000, 30000) };
 }
 export function snapshot(history: History, transport: Transport, configuration: ReturnType<typeof pacing>, now = Date.now()) {
   const entries = (['perception','intention','narration'] as Stage[]).map(stage => {
