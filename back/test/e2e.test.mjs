@@ -274,3 +274,14 @@ test('authenticated monitor coexists with controller, receives metrics but no JP
   assert.match(await script.text(),/\/ws\/monitor/);
   assert.match(workerLog,/device_connection/);
 });
+
+test('FE receives every valid frame above 2 FPS independently of the AI evaluation cadence',async()=>{
+  const device=await connect('stackchan-01','device','dev-device-01'), viewer=await connect('stackchan-01');
+  for(let id=0;id<8;id++) {await frame(device,id);await viewer.wait(m=>Buffer.isBuffer(m)&&m.readUInt32BE(0)===id);}
+  assert.equal(viewer.messages.filter(Buffer.isBuffer).length,8);
+  await sleep(1100);viewer.send('telemetry_request',{});
+  const stats=await viewer.wait(m=>m.type==='telemetry_snapshot' && m.data.transport.frames_received===8);
+  assert.equal(stats.data.transport.frames_received,8);assert.ok(stats.data.transport.received_fps>2);
+  assert.equal(stats.data.pacing.evaluation_interval_ms,2000);
+  viewer.ws.close(1000);device.ws.close(1000);
+});

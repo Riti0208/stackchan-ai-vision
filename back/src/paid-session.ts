@@ -30,3 +30,41 @@ export function guardedFetch(env: PaidEnv, reserve: () => Promise<{ active: bool
     return outbound(input, { ...init, signal: original ? AbortSignal.any([original, deadline]) : deadline });
   };
 }
+
+export type ControlledPaidEnv = PaidEnv & { ENABLE_PAID_CONTROL?: string; PAID_CONTROL_ROOM?: string; OPENAI_API_KEY?: string; VERSION_METADATA?: { id: string } };
+type ManualSession = { id: string; epoch: string; until: number; max: number; used: number; stopped: boolean };
+export type BudgetStatus = ReturnType<typeof paidSession> & { session_id?: string | null };
+function manualStatus(record: ManualSession | undefined, env: ControlledPaidEnv): BudgetStatus {
+  const base = { expires_at: record?.until || null, max_calls: record?.max || 0, used_calls: record?.used || 0, session_id: record?.id || null };
+  const reason = !record ? 'not_started' : record.stopped ? 'stopped' : record.epoch !== (env.VERSION_METADATA?.id || 'local') ? 'deployment_changed' : Date.now() >= record.until ? 'expired' : record.used >= record.max ? 'call_limit' : null;
+  return { ...base, active: reason === null, reason };
+}
+export async function controlledBudget(storage: DurableObjectStorage, env: ControlledPaidEnv, reserve = false, expected?: string): Promise<BudgetStatus> {
+  return storage.transaction(async tx => {
+    const record = await tx.get<ManualSession>('manual-paid-session');
+    const status = manualStatus(record, env);
+    if (reserve && expected !== record?.id) return { ...status, active: false, reason: 'session_changed' };
+    if (reserve && status.active && record) {
+      record.used++; await tx.put('manual-paid-session', record);
+      // The final reserved call is authorized; subsequent reservations see the cap.
+      return { ...manualStatus(record, env), active: true, reason: null };
+    }
+    return status;
+  });
+}
+export async function updatePaidSession(storage: DurableObjectStorage, env: ControlledPaidEnv, command: { action: 'start' | 'stop'; seconds?: number; max_calls?: number }): Promise<BudgetStatus> {
+  if (env.ENABLE_PAID_CONTROL !== 'true') throw new Error('control_disabled');
+  if (command.action === 'start') {
+    if (!env.OPENAI_API_KEY?.trim()) throw new Error('key_not_configured');
+    if (!Number.isSafeInteger(command.seconds) || command.seconds! < 1 || command.seconds! > 600 || !Number.isSafeInteger(command.max_calls) || command.max_calls! < 1 || command.max_calls! > 1000) throw new Error('invalid_limits');
+  }
+  return storage.transaction(async tx => {
+    let record = await tx.get<ManualSession>('manual-paid-session');
+    if (command.action === 'start') {
+      if (manualStatus(record, env).active) throw new Error('already_active');
+      record = { id: crypto.randomUUID(), epoch: env.VERSION_METADATA?.id || 'local', until: Date.now() + command.seconds! * 1000, max: command.max_calls!, used: 0, stopped: false };
+    } else record = { ...(record || { id: crypto.randomUUID(), epoch: env.VERSION_METADATA?.id || 'local', until: 0, max: 0, used: 0 }), stopped: true };
+    await tx.put('manual-paid-session', record);
+    return manualStatus(record, env);
+  });
+}

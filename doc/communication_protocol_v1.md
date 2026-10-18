@@ -1,4 +1,4 @@
-# 通信仕様 v1.8 — FE / BE / FW
+# 通信仕様 v1.9 — FE / BE / FW
 
 更新日: 2026-10-18。対象: 2026-10-18のハッカソン。
 
@@ -8,7 +8,7 @@
 
 ## 通信契約の型と共有方法
 
-コード上の入口は [`back/src/protocol.ts`](../back/src/protocol.ts)。文書の改訂はv1.8、WSの`protocol_version`は引き続き1。
+コード上の入口は [`back/src/protocol.ts`](../back/src/protocol.ts)。文書の改訂はv1.9、WSの`protocol_version`は引き続き1。
 FEは`ClientMessage` / `ServerMessage`を型としてimportする。FW実装者はこの文書の値域・送信経路を参照する。
 
 - `ClientData` / `ServerData`: メッセージ種別からdata型への対応。`ClientMessage` / `ServerMessage`はtypeでdataを絞り込めるunion。
@@ -40,7 +40,7 @@ BEは全送信イベントのdata型をチェックし、シミュレーター�
 
 ## 1. 設計案からの変更と固定事項
 
-[設計書 v1.8](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
+[設計書 v1.9](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
 以下は設計案の追加・変更であり、通信については本書を優先する。
 
 - **同一roomに複数のスタックチャンが参加可能**。各本体はroom内で一意な`device_id`を持つ。
@@ -316,7 +316,7 @@ callsの各項目はendpoint(decisions/responses)、model、request_id(string/nu
 意向・文章の再利用時はresponsesの呼び出しが含まれない。mockはcalls=[]、各合計0。
 APIキー・プロンプト・APIの生レスポンスはイベントに含めない。
 
-v1.8のdecisionにはaffectも付く。形は次のとおり。
+v1.9のdecisionにはaffectも付く。形は次のとおり。
 
 ```json
 {"provider":"openai","model":"gpt-6-luna","previous_emotion":{"happiness":0.5,"curiosity":0.5,"excitement":0.2,"shyness":0.8,"trust":0.5},"confidence":{"happiness":0.8,"curiosity":0.9,"excitement":0.8,"shyness":0.7,"trust":0.6},"history_size":3,"received_message_is_new":true}
@@ -548,7 +548,7 @@ FPS・推論周期・遅延や複数台時の負荷は未検証。接続台数�
 
 ## 参考
 
-- [設計書 v1.8（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
+- [設計書 v1.9（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
 - [Cloudflare Durable Objects WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
 - [ブラウザのWebSocketコンストラクター](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/WebSocket)
 
@@ -582,3 +582,30 @@ JPEGは受信しない。送信可能なメッセージは`heartbeat`と`telemet
 `detection`やバイナリ等の書き込みは拒否する。セッション期限切れは4003で切断する。
 再接続してもFWや解析の開始は行わない。モニター専用の内部ヘッダーを外部から指定してもBEが上書きする。
 `telemetry_snapshot`は既存の直近API120件・パイプライン60件の履歴を返し、累計とは区別する。
+
+## 実APIの明示的な開始・停止（公開デバッグ）
+
+`ENABLE_PAID_CONTROL=true`の環境で、`POST /api/control/paid-session?room=main`を追加する。
+`ALLOWED_ORIGIN`と有効な部屋Cookieを必須とし、`PAID_CONTROL_ROOM`（既定main）の認証だけを許可する。
+`Content-Type: application/json`、bodyは最大1024 bytes。
+- 開始: `{"action":"start","seconds":300,"max_calls":100}`。secondsは整数1〜600、max_callsは整数1〜1000。
+- 停止: `{"action":"stop"}`。
+
+応答はpaid_sessionと同じactive/reason/expires_at/max_calls/used_callsにsession_idを加える。
+期限・使用量は全ルーム・全個体・全APIで共通。未認証401、Origin/権限不一致403、不正な上限400、
+有効なセッションへの二重開始409、APIキー未設定503。開始状態と予算は中央DOのtransactionで保存する。
+各送信前にsession_idを照合するため、停止・再開後の古い処理は新しい予算を利用できない。
+GET・モニター購読・再接続は開始操作をしない。停止後は新規リクエストを拒否し、進行中の通信を中断する。
+期限切れ・上限・手動停止時はモックへ戻り、自動で実APIを再開しない。Workerバージョンの変更でも無効化する。
+`/health`のpaid_controlにenabled/key_configured/roomを返し、実効ai_modeは稼働中だけdecisions。
+JSONのWebSocketモニター契約は引き続き読み取り専用。開始・停止だけを上記の別HTTP経路で操作する。
+
+映像を2fpsに制限する受信契約ではない。通常FEへの中継とOpenAI評価の間隔は独立。
+遅いviewerの未確認フレーム数上限は従来どおり4枚で、その接続を切断してバックログを防ぐ。
+
+### モニター専用 api_activity
+
+`ServerData.api_activity`は、call_id/run_id/stream_id/device_id/stage/endpoint/modelを共通項目とする。
+`state=started`ではstarted_at、`state=completed`ではAPISample型のsampleを返す。
+モニター専用接続だけへ送信し、本体や既存のFEには追加イベントを流さない。
+受信時に進行中の呼び出しがあればstartedを送る。過去の完了履歴はtelemetry_snapshotで補完する。

@@ -67,3 +67,28 @@ test('demo auto-stop closes on deadline, cap and unreadable budget without resta
     assert.equal(stops, 1); assert.deepEqual(reports, [mode === 'deadline' ? 'expired' : mode === 'cap' ? 'call_limit' : 'unavailable']);
   }
 });
+
+test('manual sessions start only explicitly, preserve shared caps, stop and reject previous grants', async () => {
+  const {controlledBudget,updatePaidSession}=await import('../src/paid-session.ts');
+  const state=storage(), env={ENABLE_PAID_CONTROL:'true',OPENAI_API_KEY:'fake',VERSION_METADATA:{id:'v1'}};
+  assert.equal((await controlledBudget(state,env)).reason,'not_started');
+  const results=await Promise.allSettled(Array.from({length:10},()=>updatePaidSession(state,env,{action:'start',seconds:300,max_calls:2})));
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  const initial=await controlledBudget(state,env);
+  const calls=await Promise.all(Array.from({length:10},()=>controlledBudget(state,env,true,initial.session_id)));
+  assert.equal(calls.filter(r=>r.active).length,2);
+  assert.equal((await controlledBudget(state,env)).reason,'call_limit');
+  const stopped=await updatePaidSession(state,env,{action:'stop'});assert.equal(stopped.reason,'stopped');assert.equal(stopped.used_calls,2);
+  const next=await updatePaidSession(state,env,{action:'start',seconds:300,max_calls:100});
+  assert.notEqual(next.session_id,initial.session_id);
+  assert.equal((await controlledBudget(state,env,true,initial.session_id)).reason,'session_changed');
+  assert.equal((await controlledBudget(state,{...env,VERSION_METADATA:{id:'v2'}})).reason,'deployment_changed');
+});
+test('manual session bounds, capability and API key are enforced before any grant', async()=>{
+  const {updatePaidSession,controlledBudget}=await import('../src/paid-session.ts');
+  const state=storage(), env={ENABLE_PAID_CONTROL:'true',OPENAI_API_KEY:'fake'};
+  await assert.rejects(updatePaidSession(state,{}, {action:'start',seconds:300,max_calls:100}),/control_disabled/);
+  await assert.rejects(updatePaidSession(state,{ENABLE_PAID_CONTROL:'true'}, {action:'start',seconds:300,max_calls:100}),/key_not_configured/);
+  for(const [seconds,max_calls] of [[0,100],[601,100],[300,0],[300,1001],[1.5,2]]) await assert.rejects(updatePaidSession(state,env,{action:'start',seconds,max_calls}),/invalid_limits/);
+  assert.equal((await controlledBudget(state,env)).active,false);
+});

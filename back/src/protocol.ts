@@ -3,7 +3,7 @@
  * TypeScript types do not validate JSON: use the parsers at the network boundary.
  */
 import type { CallMetrics } from './openai.ts';
-import type { snapshot } from './telemetry.ts';
+import type { APISample, Stage, snapshot } from './telemetry.ts';
 export const actions = ['idle', 'look_at', 'nod', 'shake', 'happy'] as const;
 export const expressions = ['neutral', 'happy', 'sad', 'surprised', 'thinking'] as const;
 export type Action = typeof actions[number];
@@ -203,6 +203,10 @@ export interface ServerData {
         experience_count: number;
         total_experiences: number;
     };
+    api_activity: {
+        call_id: string; run_id: string; stream_id: string; device_id: string;
+        stage: Stage; endpoint: CallMetrics['endpoint']; model: string;
+    } & ({ state: 'started'; started_at: number } | { state: 'completed'; sample: APISample });
     telemetry: TelemetrySummary;
     telemetry_snapshot: TelemetrySnapshot;
 }

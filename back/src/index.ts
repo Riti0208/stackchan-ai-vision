@@ -1,15 +1,15 @@
 import { monitorHTML, monitorJS } from './monitor';
 import { logConnection, logRun, logTransport } from './observability';
 import { serializeServer, parseClientMessage, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
-import { paidSession, reservePaidCall, guardedFetch, type PaidEnv } from './paid-session';
+import { paidSession, reservePaidCall, guardedFetch, controlledBudget, updatePaidSession, type BudgetStatus, type ControlledPaidEnv } from './paid-session';
 import { newHistory, newTransport, recordRun, receiveFrame, addSample, pacing, snapshot, type History, type Transport, type Pipeline, type Stage } from './telemetry';
 import { initialHumanActions, scanHumanActions, consumeHumanAction, type HumanActionState } from './human-actions';
 import { choosePersonality, initialEmotion, personalities, isPersonality } from './personality';
-import { callDecisions, callNarration, summarizeCalls, OpenAIError, DECISIONS_MODEL, type CallMetrics } from './openai';
+import { callDecisions, callNarration, summarizeCalls, OpenAIError, DECISIONS_MODEL, type APITiming, type CallMetrics } from './openai';
 import { narrationPayload, needsNarration, fallbackNarration, mockNarration } from './narration';
 import { initialMind, planFor, socialContext, mockChoice, type Mind, type Behavior, type Dialogue, type PublicPeer, type Motion, type Personality } from './social';
 import { evaluationPayload, parseEvaluation, mockEvaluation, projectExperiences, emotionKeys, type Emotion, type Experience, type Affect } from './perception';
-interface Env extends PaidEnv {
+interface Env extends ControlledPaidEnv {
   ROOMS: DurableObjectNamespace; ASSETS?: Fetcher; ROOM_CONFIG?: string; SESSION_SECRET?: string;
   ALLOWED_ORIGIN?: string; ENABLE_LAB?: string; AI_MODE?: string; OPENAI_API_KEY?: string; STREAM_FPS?: string; EVAL_INTERVAL_MS?: string; NARRATION_INTERVAL_MS?: string;
 }
@@ -70,7 +70,11 @@ export default {
         'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
       } });
     }
-    if (url.pathname === '/health') return json({ paid_session: env.AI_MODE === 'decisions' ? await (await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : paidSession(env), ok: true, ai_mode: env.AI_MODE || 'mock', protocol_version: 1, ai_model: env.AI_MODE === 'decisions' ? DECISIONS_MODEL : null, narration_model: env.AI_MODE === 'decisions' ? DECISIONS_MODEL : null, ai_configured: env.AI_MODE !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
+    if (url.pathname === '/health') {
+      const state: BudgetStatus = env.ENABLE_PAID_CONTROL === 'true' || env.AI_MODE === 'decisions' ? await (await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : paidSession(env);
+      const mode = env.ENABLE_PAID_CONTROL === 'true' ? state.active ? 'decisions' : 'mock' : env.AI_MODE || 'mock';
+      return json({ paid_session: state, paid_control: { enabled: env.ENABLE_PAID_CONTROL === 'true', key_configured: !!env.OPENAI_API_KEY?.trim(), room: env.PAID_CONTROL_ROOM || 'main' }, ok: true, ai_mode: mode, protocol_version: 1, ai_model: mode === 'decisions' ? DECISIONS_MODEL : null, narration_model: mode === 'decisions' ? DECISIONS_MODEL : null, ai_configured: mode !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
+    }
     if (url.pathname === '/' || url.pathname.startsWith('/lab')) {
       if (!env.ASSETS || (url.pathname.startsWith('/lab') && env.ENABLE_LAB !== 'true')) return fail(404, 'not_found');
       return env.ASSETS.fetch(req);
@@ -88,6 +92,20 @@ export default {
       if (!config(env)[room]) return fail(404, 'not_found');
       const internal = new Request(`https://room.internal/login?room=${room}`, { method: 'POST', body: JSON.stringify(body), headers: { 'X-Client-IP': req.headers.get('CF-Connecting-IP') || 'local', 'X-Secure': String(url.protocol === 'https:') } });
       return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(internal);
+    }
+    if (url.pathname === '/api/control/paid-session') {
+      if (req.method !== 'POST') return fail(405, 'method_not_allowed');
+      if (env.ENABLE_PAID_CONTROL !== 'true') return fail(403, 'control_disabled');
+      if (req.headers.get('Origin') !== env.ALLOWED_ORIGIN) return fail(403, 'forbidden');
+      if (room !== (env.PAID_CONTROL_ROOM || 'main') || !config(env)[room]) return fail(403, 'forbidden');
+      if (!await session(req, room, env)) return fail(401, 'unauthorized');
+      if (!(req.headers.get('Content-Type') || '').startsWith('application/json')) return fail(400, 'invalid_request');
+      const body = await req.text(); if (new TextEncoder().encode(body).length > 1024) return fail(413, 'invalid_request');
+      let command: any; try { command = JSON.parse(body); } catch { return fail(400, 'invalid_request'); }
+      if (!command || !['start','stop'].includes(command.action) || Object.keys(command).some(k => !['action','seconds','max_calls'].includes(k))) return fail(400, 'invalid_request');
+      const response = await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-control', { method: 'POST', body: JSON.stringify(command) });
+      if (response.ok) await Promise.allSettled(Object.keys(config(env)).map(name => env.ROOMS.get(env.ROOMS.idFromName(name)).fetch('https://room.internal/paid-state-changed', { method: 'POST' })));
+      return response;
     }
     const list = url.pathname.match(/^\/api\/rooms\/([a-z0-9_-]+)\/devices$/);
     if (list && req.method === 'GET') {
@@ -129,11 +147,10 @@ export class Room {
   private identities = new Map<string, Identity>();
   private metricHistory = new Map<string, History>();
   private ready: Promise<void>;
+  private activeAPICalls = new Map<string, ServerData['api_activity']>();
+  private pendingAI = new Set<AbortController>();
   constructor(private ctx: DurableObjectState, private env: Env, private aiFetch: typeof fetch = fetch) {
-    this.aiFetch = guardedFetch(env, async () => {
-      const response = await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget', { method: 'POST' });
-      return response.json();
-    }, aiFetch);
+    this.aiFetch = aiFetch;
     this.ready = ctx.blockConcurrencyWhile(async () => {
       [this.identities, this.metricHistory] = await Promise.all([ctx.storage.list<Identity>({ prefix: 'identity:' }), ctx.storage.list<History>({ prefix: 'telemetry:' })]);
     });
@@ -182,7 +199,21 @@ export class Room {
   async fetch(req: Request): Promise<Response> {
     await this.ready;
     const url = new URL(req.url), room = url.searchParams.get('room')!;
-    if (url.pathname === '/paid-budget') return json(await reservePaidCall(this.ctx.storage, this.env, req.method === 'POST'));
+    if (url.pathname === '/paid-budget') return json(this.env.ENABLE_PAID_CONTROL === 'true'
+      ? await controlledBudget(this.ctx.storage, this.env, req.method === 'POST', url.searchParams.get('session_id') || undefined)
+      : await reservePaidCall(this.ctx.storage, this.env, req.method === 'POST'));
+    if (url.pathname === '/paid-control' && req.method === 'POST') {
+      try {
+        const state = await updatePaidSession(this.ctx.storage, this.env, await req.json());
+        console.log({ event: 'paid_session_control', active: state.active, reason: state.reason, expires_at: state.expires_at, max_calls: state.max_calls, used_calls: state.used_calls });
+        return json(state);
+      } catch (error) { const code = error instanceof Error ? error.message : 'control_failed'; return fail(code === 'already_active' ? 409 : code === 'key_not_configured' ? 503 : code === 'control_disabled' ? 403 : 400, code); }
+    }
+    if (url.pathname === '/paid-state-changed' && req.method === 'POST') {
+      for (const controller of this.pendingAI) controller.abort();
+      for (const d of this.devices.values()) { d.retryAt = 0; d.lastAI = 0; d.textRetryAt = 0; d.lastTextAt = 0; }
+      return json({ ok: true });
+    }
     if (url.pathname === '/login') {
       const now = Date.now(), ip = req.headers.get('X-Client-IP')!;
       for (const [key, value] of this.loginAttempts) if (value.until <= now) this.loginAttempts.delete(key);
@@ -228,6 +259,7 @@ export class Room {
     }
     send(p, 'session', { protocol_version: 1, room, device_id: id, role });
     if (role !== 'device') { send(p, 'stream', { stream_id: d.stream }); send(p, 'emotion', d.emotion); send(p, 'device_status', d.status); send(p, 'mind', d.mind); send(p, 'behavior', d.behavior || null); send(p, 'dialogue_history', { messages: this.dialogue }); send(p, 'memory', this.memory(d)); send(p, 'telemetry', this.telemetry(d)); }
+    if (p.monitor) for (const activity of this.activeAPICalls.values()) if (activity.device_id === id) send(p, 'api_activity', activity);
     server.addEventListener('message', event => this.message(p, d, event.data));
     const cleanup = () => this.cleanup(p, d);
     server.addEventListener('close', cleanup); server.addEventListener('error', cleanup);
@@ -327,40 +359,52 @@ export class Room {
         const p = d.controller; close(p, p.expires! <= now ? 4003 : 4000, 'controller_timeout'); this.cleanup(p, d);
       }
       if (d.lastDetection && d.mind.intent === 'observe' && now - d.lastDetection > 3000 && now >= d.gestureUntil) { this.action(d, 'idle', 'neutral', 500); d.lastDetection = 0; }
-      if ((this.env.AI_MODE !== 'decisions' || paidSession(this.env).active) && d.peer && d.latest && now >= d.retryAt && !d.busy && now - d.lastAI >= pacing(this.env).evaluation_interval_ms && d.latest.order > d.lastDecision && now - d.latest.at <= 3000) {
+      if ((this.env.ENABLE_PAID_CONTROL === 'true' || this.env.AI_MODE !== 'decisions' || paidSession(this.env).active) && d.peer && d.latest && now >= d.retryAt && !d.busy && now - d.lastAI >= pacing(this.env).evaluation_interval_ms && d.latest.order > d.lastDecision && now - d.latest.at <= 3000) {
         const stream = d.stream;
         d.lastAI = now; d.busy = true;
         const started = performance.now();
         const run: Pipeline = { id: crypto.randomUUID(), stream_id: stream!, frame_id: d.latest.id, frame_received_at: d.latest.at, started_at: now, completed_at: 0, duration_ms: 0, outcome: 'discarded', reason: 'state_changed', api: [] };
-        this.ctx.waitUntil(this.decide(d, run).catch(error => {
+        const controller = new AbortController(); this.pendingAI.add(controller);
+        this.ctx.waitUntil(this.decide(d, run, controller.signal).catch(error => {
+          if (controller.signal.aborted) { run.reason = 'paid_session_changed'; return; }
           run.outcome = 'error'; run.reason = error instanceof OpenAIError ? `http_${error.status}` : 'evaluation_failed';
           const last = run.api.at(-1); if (error instanceof Error && /^(Invalid|Missing|Duplicate)/.test(error.message) && last?.outcome === 'success') last.outcome = 'invalid_response';
           if (d.stream !== stream) return;
           const retry = error instanceof OpenAIError ? error.retryAfterMs : 10000;
           d.retryAt = Date.now() + retry;
           this.broadcast(d, 'error', { code: 'ai_unavailable', message: error instanceof OpenAIError ? error.message : 'AI evaluation failed; state preserved', retry_after_ms: retry });
-        }).finally(async () => { if (d.stream === stream) d.busy = false; await this.finishRun(d, run, started); }));
+        }).finally(async () => { this.pendingAI.delete(controller); if (d.stream === stream) d.busy = false; await this.finishRun(d, run, started); }));
       }
     }
   }
-  private async decide(d: Device, run: Pipeline) {
+  private async decide(d: Device, run: Pipeline, signal: AbortSignal) {
     const frame = d.latest!, stream = d.stream!, before = { ...d.emotion };
+    const controlled = this.env.ENABLE_PAID_CONTROL === 'true';
+    const status: BudgetStatus | undefined = controlled ? await (await this.env.ROOMS.get(this.env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : undefined;
+    if (signal.aborted || d.stream !== stream || !d.peer) return;
+    const mode = controlled ? status?.active ? 'decisions' : 'mock' : this.env.AI_MODE;
+    const runEnv = controlled ? { AI_MODE: mode, PAID_SESSION_ID: status?.session_id || '', PAID_SESSION_UNTIL: String(status?.expires_at || 0), PAID_SESSION_MAX_CALLS: String(status?.max_calls || 0) } : this.env;
+    const aiFetch = guardedFetch(runEnv, async () => {
+      const url = new URL('https://room.internal/paid-budget');
+      if (controlled) url.searchParams.set('session_id', status?.session_id || '');
+      return (await this.env.ROOMS.get(this.env.ROOMS.idFromName('__paid_budget__')).fetch(url.toString(), { method: 'POST' })).json();
+    }, (input, init) => this.aiFetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal }));
     const calls: CallMetrics[] = [];
     const started = Date.now();
     d.inbox = d.inbox.filter(m => m.expires_at > started && m.to_stream_id === stream && this.devices.get(m.from_device_id)?.stream === m.from_stream_id);
     const incoming = d.inbox[0], incomingIsNew = !!incoming && !d.experienced.has(incoming.id), peers = this.publicPeers(d);
     const historySize = d.affectiveHistory.length;
     let evaluation: ReturnType<typeof parseEvaluation>;
-    if (this.env.AI_MODE === 'mock') {
+    if (mode === 'mock') {
       evaluation = mockEvaluation(frame.id, before, d.mind.personality, incomingIsNew, d.affectiveHistory);
-    } else if (this.env.AI_MODE === 'decisions') {
+    } else if (mode === 'decisions') {
       const bytes = new Uint8Array(frame.bytes); let binary = '';
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-      const first = await this.ask(run, 'perception', evaluationPayload(`data:image/jpeg;base64,${btoa(binary)}`, socialContext(d.mind, before, undefined, peers, incoming, started, d.publicHistory.slice(-6)), d.affectiveHistory, incomingIsNew), calls);
+      const first = await this.ask(d, run, 'perception', evaluationPayload(`data:image/jpeg;base64,${btoa(binary)}`, socialContext(d.mind, before, undefined, peers, incoming, started, d.publicHistory.slice(-6)), d.affectiveHistory, incomingIsNew), calls, aiFetch);
       evaluation = parseEvaluation(first);
     } else throw new Error('Unknown AI_MODE');
     const { observations, emotion: next } = evaluation;
-    const valid = () => d.stream === stream && !!d.peer && Date.now() - frame.at <= 10000 && frame.order > d.lastDecision;
+    const valid = () => !signal.aborted && d.stream === stream && !!d.peer && Date.now() - frame.at <= 10000 && frame.order > d.lastDecision;
     if (!valid()) { run.reason = 'stale_frame_or_stream'; return; }
     const now = Date.now();
     const scan = scanHumanActions(d.human, observations, { order: frame.order, frame_id: frame.id, stream_id: stream!, at: now });
@@ -380,9 +424,9 @@ export class Room {
     const newCompanion = ['curious', 'cheerful', 'playful'].includes(d.mind.personality) && d.mind.intent === 'observe' && available.some(c => c.startsWith('greet:'));
     const held = now < d.mind.valid_until && !humanEvent && !newCompanion && !available.some(c => c.startsWith('reply:') || c.startsWith('listen:'));
     if (held) choice = d.mind.intent === 'avert' ? 'avert' : d.mind.intent === 'rest' ? 'rest' : 'observe';
-    else if (this.env.AI_MODE === 'mock') choice = mockChoice(d.mind.personality, available, observations.person_present >= .5, d.mind.intent, humanEvent, d.affectiveHistory);
+    else if (mode === 'mock') choice = mockChoice(d.mind.personality, available, observations.person_present >= .5, d.mind.intent, humanEvent, d.affectiveHistory);
     else {
-      const response = await this.ask(run, 'intention', { input: JSON.stringify(context()), questions: [{ type: 'choice', name: 'intention', instructions: "Choose this fictional robot's own intention from observations, its personality, emotional state and public interactions. A shy robot may be glad but hide it by averting its gaze or politely nodding. Do not mirror a human expression. Peers' private thoughts are not available. Only received_utterance is a message addressed to you. Online peers can be greeted even without a human in the camera. A curious robot generally prefers greeting a new available peer once over resting alone, and receiving a friendly greeting or acknowledgement over ignoring it. A human_action is a newly confirmed change, not a repeated pose or proof of actual waving motion. Reassess it using your personality, feelings and own_affective_history. You may acknowledge a raised hand, delight, avert your gaze, watch quietly or rest. Do not always reciprocate. If human_action is null and the situation is unchanged, prefer continuity with previous_choice. Pick rest if there is no person, no available new peer and no received interaction.", choices: available.map(value => ({ value, description: value.startsWith('listen:') ? 'Receive an acknowledgement and respond nonverbally, without another utterance' : value.startsWith('reply:') ? 'Reply once to the received greeting' : value.startsWith('greet:') ? 'Greet this online peer and invite company, even if no human is visible' : ({ acknowledge_person: 'Give one small nonverbal nod to the visible person', delight: 'Show a brief happy gesture toward the visible person', observe: 'Watch the person with curiosity', avert: 'Keep interest private and avert your gaze', rest: 'Wait quietly' } as Record<string, string>)[value] })) }] }, calls);
+      const response = await this.ask(d, run, 'intention', { input: JSON.stringify(context()), questions: [{ type: 'choice', name: 'intention', instructions: "Choose this fictional robot's own intention from observations, its personality, emotional state and public interactions. A shy robot may be glad but hide it by averting its gaze or politely nodding. Do not mirror a human expression. Peers' private thoughts are not available. Only received_utterance is a message addressed to you. Online peers can be greeted even without a human in the camera. A curious robot generally prefers greeting a new available peer once over resting alone, and receiving a friendly greeting or acknowledgement over ignoring it. A human_action is a newly confirmed change, not a repeated pose or proof of actual waving motion. Reassess it using your personality, feelings and own_affective_history. You may acknowledge a raised hand, delight, avert your gaze, watch quietly or rest. Do not always reciprocate. If human_action is null and the situation is unchanged, prefer continuity with previous_choice. Pick rest if there is no person, no available new peer and no received interaction.", choices: available.map(value => ({ value, description: value.startsWith('listen:') ? 'Receive an acknowledgement and respond nonverbally, without another utterance' : value.startsWith('reply:') ? 'Reply once to the received greeting' : value.startsWith('greet:') ? 'Greet this online peer and invite company, even if no human is visible' : ({ acknowledge_person: 'Give one small nonverbal nod to the visible person', delight: 'Show a brief happy gesture toward the visible person', observe: 'Watch the person with curiosity', avert: 'Keep interest private and avert your gaze', rest: 'Wait quietly' } as Record<string, string>)[value] })) }] }, calls, aiFetch);
       const answer = response.answers?.find((a: any) => a.name === 'intention');
       if (answer?.type !== 'choice' || !available.includes(answer.choice) || !finite(answer.confidence)) throw new Error('Invalid intention');
       choice = answer.choice; confidence = answer.confidence;
@@ -405,7 +449,7 @@ export class Room {
     let text = { thought: d.mind.thought, public_text: null as string | null }, generation = d.mind.generation;
     if (!held && (!!humanEvent || needsNarration(d.mind, choice, next, d.textEmotion))) {
       text = fallbackNarration(choice, plan.thought, personalities[d.mind.personality].restrained, observations.person_present >= .5);
-      if (this.env.AI_MODE === 'mock') {
+      if (mode === 'mock') {
         text = mockNarration(choice, plan.thought, personalities[d.mind.personality].restrained, observations);
         generation = { provider: 'mock', model: null, reason: null };
         d.textEmotion = { ...next };
@@ -414,7 +458,7 @@ export class Room {
       } else {
         d.lastTextAt = Date.now();
         try {
-          const generated = await callNarration(this.env.OPENAI_API_KEY || '', narrationPayload(context(), choice), isSpeech, this.aiFetch, 3000, sample => run.api.push({ ...sample, stage: 'narration', run_id: run.id, stream_id: run.stream_id }));
+          const generated = await this.traceCall(d, run, 'narration', 'responses', observer => callNarration(this.env.OPENAI_API_KEY || '', narrationPayload(context(), choice), isSpeech, aiFetch, 3000, observer));
           text = generated.text; calls.push(generated.metrics);
           generation = { provider: 'openai', model: DECISIONS_MODEL, reason: null };
         } catch (error) {
@@ -425,6 +469,10 @@ export class Room {
         if (!valid() || !socialValid()) return;
         if (generation.provider === 'openai') d.textEmotion = { ...next };
       }
+    }
+    if (controlled && mode === 'decisions') {
+      const current: BudgetStatus = await (await this.env.ROOMS.get(this.env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json();
+      if (current.session_id !== status?.session_id || ['stopped','expired','deployment_changed','not_started'].includes(current.reason || '')) { run.reason = 'paid_session_stopped'; return; }
     }
     // Network waits must not commit old streams, vanished peers or expired events.
     if (!valid() || !socialValid() || (humanEvent && humanEvent.expires_at <= Date.now())) return;
@@ -448,8 +496,8 @@ export class Room {
     const trigger = humanEvent ? 'human_action' : isReceived ? 'dialogue' : newCompanion ? 'companion' : held ? 'held' : !d.lastChoice ? 'initial' : 'periodic';
     if (!held) d.lastChoice = choice;
     this.broadcast(d, 'emotion', d.emotion);
-    const affect: Affect = { provider: this.env.AI_MODE === 'decisions' ? 'openai' : 'mock', model: this.env.AI_MODE === 'decisions' ? DECISIONS_MODEL : null, previous_emotion: before, confidence: evaluation.confidence, history_size: historySize, received_message_is_new: incomingIsNew };
-    this.broadcast(d, 'decision', { stream_id: stream, frame_id: frame.id, observations, affect, human_action: humanEvent || null, reaction: { trigger, intent_reassessed: !held, command_issued: issueCommand, selected_choice: choice, event_id: humanEvent?.id || null }, selected_action: issueCommand ? plan.action : d.behavior?.command.action || 'idle', confidence, mind_revision: d.mind.revision, intent: d.mind.intent, ai: summarizeCalls(calls, this.env.AI_MODE === 'decisions') });
+    const affect: Affect = { provider: mode === 'decisions' ? 'openai' : 'mock', model: mode === 'decisions' ? DECISIONS_MODEL : null, previous_emotion: before, confidence: evaluation.confidence, history_size: historySize, received_message_is_new: incomingIsNew };
+    this.broadcast(d, 'decision', { stream_id: stream, frame_id: frame.id, observations, affect, human_action: humanEvent || null, reaction: { trigger, intent_reassessed: !held, command_issued: issueCommand, selected_choice: choice, event_id: humanEvent?.id || null }, selected_action: issueCommand ? plan.action : d.behavior?.command.action || 'idle', confidence, mind_revision: d.mind.revision, intent: d.mind.intent, ai: summarizeCalls(calls, mode === 'decisions') });
     const lastExperience = d.affectiveHistory.at(-1);
     if (!lastExperience || humanEvent || incomingIsNew || lastExperience.intent !== d.mind.intent || emotionKeys.some(k => Math.abs(lastExperience.emotion_after[k] - next[k]) >= .1)) {
       d.totalExperiences++;
@@ -482,8 +530,20 @@ export class Room {
   private cancelConversations(id: string) {
     for (const d of this.devices.values()) d.inbox = d.inbox.filter(m => m.from_device_id !== id && m.to_device_id !== id);
   }
-  private async ask(run: Pipeline, stage: Stage, payload: object, calls: CallMetrics[]): Promise<any> {
-    const { body, metrics } = await callDecisions(this.env.OPENAI_API_KEY || '', payload, this.aiFetch, 4000, sample => run.api.push({ ...sample, stage, run_id: run.id, stream_id: run.stream_id }));
+  private async traceCall<T>(d: Device, run: Pipeline, stage: Stage, endpoint: CallMetrics['endpoint'], operation: (observer: (sample: APITiming) => void) => Promise<T>): Promise<T> {
+    const base = { call_id: crypto.randomUUID(), run_id: run.id, stream_id: run.stream_id, device_id: d.id, stage, endpoint, model: DECISIONS_MODEL };
+    const started: ServerData['api_activity'] = { ...base, state: 'started', started_at: Date.now() };
+    this.activeAPICalls.set(base.call_id, started);
+    for (const peer of d.viewers) if (peer.monitor) send(peer, 'api_activity', started);
+    try {
+      return await operation(sample => {
+        const entry = { ...sample, stage, run_id: run.id, stream_id: run.stream_id }; run.api.push(entry);
+        for (const peer of d.viewers) if (peer.monitor) send(peer, 'api_activity', { ...base, state: 'completed', sample: entry });
+      });
+    } finally { this.activeAPICalls.delete(base.call_id); }
+  }
+  private async ask(d: Device, run: Pipeline, stage: Stage, payload: object, calls: CallMetrics[], aiFetch: typeof fetch): Promise<any> {
+    const { body, metrics } = await this.traceCall(d, run, stage, 'decisions', observer => callDecisions(this.env.OPENAI_API_KEY || '', payload, aiFetch, 4000, observer));
     calls.push(metrics);
     return body;
   }

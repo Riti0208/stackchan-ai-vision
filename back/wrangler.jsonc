@@ -21,7 +21,9 @@
   ],
   "vars": {
     "AI_MODE": "mock",
-    "ENABLE_LAB": "false"
+    "ENABLE_LAB": "false",
+    "ENABLE_PAID_CONTROL": "true",
+    "PAID_CONTROL_ROOM": "main"
   },
   "assets": {
     "directory": "../front/dist",
@@ -34,5 +36,8 @@
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
+  },
+  "version_metadata": {
+    "binding": "VERSION_METADATA"
   }
 }
