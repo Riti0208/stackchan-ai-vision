@@ -19,6 +19,9 @@ constexpr int TILT_LIMIT = 150;
 constexpr int SERVO_SPEED = 350; // Official Motion scale: 0..1000
 bool cameraReady = false;
 uint32_t frames = 0;
+uint32_t cameraFrames = 0;
+uint32_t cameraReportAt = 0;
+uint32_t lastCaptureMs = 0;
 uint32_t reportAt = 0;
 int pan = 0, tilt = 0;
 constexpr uint32_t WIFI_RETRY_MS = 10000;
@@ -139,6 +142,8 @@ void startWiFi() {
     wifiConfigured = false;
     return;
   }
+  const bool txPowerReady = WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  Serial.printf("WIFI tx_power=19.5dBm configured=%s\n", txPowerReady ? "yes" : "no");
   // One retry scheduler, rather than overlapping automatic connection attempts.
   WiFi.setAutoReconnect(false);
   WiFi.setSleep(false);
@@ -202,7 +207,9 @@ bool startCamera() {
   c.xclk_freq_hz = 20000000;
   c.ledc_timer = LEDC_TIMER_0; c.ledc_channel = LEDC_CHANNEL_0;
   c.pixel_format = PIXFORMAT_RGB565; c.frame_size = FRAMESIZE_QQVGA;
-  c.jpeg_quality = 0; c.fb_count = 2;
+  // Keep extra PSRAM frame buffers so camera DMA can keep up while the
+  // network task is draining the previous frame.
+  c.jpeg_quality = 0; c.fb_count = 3;
   c.fb_location = CAMERA_FB_IN_PSRAM;
   c.grab_mode = CAMERA_GRAB_LATEST;
   c.sccb_i2c_port = -1;
@@ -316,8 +323,11 @@ void loop() {
 #else
   if (cameraReady) {
 #endif
+    const uint32_t captureStarted = millis();
     camera_fb_t* fb = esp_camera_fb_get();
+    lastCaptureMs = millis() - captureStarted;
     if (fb) {
+      ++cameraFrames;
       if (fb->format == PIXFORMAT_RGB565 && fb->width == 160 &&
           fb->height == 120 && fb->len >= 160 * 120 * 2) {
 #if FW_STAGE >= 6
@@ -340,19 +350,20 @@ void loop() {
   if (now - metricsAt >= 5000) {
     metricsAt = now;
     auto m = stackchan_fw::uploadMetrics();
-    Serial.printf("STAGE6 wifi=%s rssi=%d wss=%s session=%s ws_connections=%u upload_fps=%.2f sent=%u dropped=%u send_ms=%u rx_ack=%u ack_ms=%u action=%s expression=%s heap=%u psram_free=%u\n",
+    const uint32_t captureElapsed = now - cameraReportAt;
+    const float captureFps = captureElapsed ? cameraFrames * 1000.0f / captureElapsed : 0.0f;
+    Serial.printf("STAGE6 wifi=%s rssi=%d wss=%s session=%s ws_connections=%u capture_fps=%.2f capture_ms=%u upload_fps=%.2f sent=%u dropped=%u send_ms=%u rx_ack=%u ack_ms=%u action=%s expression=%s heap=%u psram_free=%u\n",
                   WiFi.status() == WL_CONNECTED ? "online" : "offline",
                   WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
                   stackchan_fw::wssConnected() ? "online" : "offline",
                   stackchan_fw::wssSessionReady() ? "ready" : "waiting",
-                  stackchan_fw::wssConnectionCount(),
+                  stackchan_fw::wssConnectionCount(), captureFps, lastCaptureMs,
                   m.fpsMilli / 1000.0f, m.sent, m.dropped, m.lastSendMs, m.receivedAcks, m.lastAckMs,
                   stackchan_fw::actionName(behavior.action()),
-                  behavior.expression() == stackchan_fw::Expression::Neutral ? "neutral" :
-                  behavior.expression() == stackchan_fw::Expression::Happy ? "happy" :
-                  behavior.expression() == stackchan_fw::Expression::Sad ? "sad" :
-                  behavior.expression() == stackchan_fw::Expression::Surprised ? "surprised" : "thinking",
+                  stackchan_fw::expressionName(behavior.expression()),
                   ESP.getFreeHeap(), ESP.getFreePsram());
+    cameraFrames = 0;
+    cameraReportAt = now;
   }
 #endif
 #if FW_STAGE < 6

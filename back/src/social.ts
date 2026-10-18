@@ -18,22 +18,22 @@ export function planFor(choice: string, personality: Personality): Plan {
     intent: 'greet', target: { kind: 'device', device_id: choice.slice(6) },
     thought: quiet ? 'ゆっくり知り合えたらいいな。そっと声をかけてみよう。' : shy ? '仲良くしたいけど、自分から話すのはどきどきする。' : 'あの子と仲良くなって、一緒に見てみたい！',
     display_text: shy ? '平静を装って、小さく会釈する' : '明るい表情で挨拶する',
-    action: shy ? 'nod' : 'happy', expression: shy ? 'neutral' : 'happy', duration_ms: 1000
+    action: shy ? 'nod' : 'happy', expression: shy ? 'neutral' : personality === 'playful' ? 'wink' : 'happy', duration_ms: 1000
   };
   if (choice.startsWith('listen:')) return {
     intent: 'engage', target: { kind: 'device', device_id: choice.slice(7) },
     thought: '返事をもらえた。一緒にいられて、うれしい！', display_text: '返事を聞いて、うれしそうに小さくうなずく',
-    action: 'nod', expression: shy ? 'neutral' : 'happy', duration_ms: 900
+    action: 'nod', expression: shy ? 'neutral' : personality === 'playful' ? 'love' : 'happy', duration_ms: 900
   };
   if (choice.startsWith('reply:')) return {
     intent: 'engage', target: { kind: 'device', device_id: choice.slice(6) },
     thought: quiet ? '声をかけてもらえて安心した。落ち着いて応えよう。' : shy ? '声をかけてくれて、すごくうれしい。でも照れる……。' : '返事ができてうれしい。一緒に過ごしたい！',
     display_text: quiet ? '落ち着いた表情で、小さくうなずく' : shy ? 'うれしさを隠して、控えめにうなずく' : '笑顔でうなずいて応える',
-    action: 'nod', expression: shy ? 'neutral' : 'happy', duration_ms: 900
+    action: 'nod', expression: shy ? 'neutral' : personality === 'playful' ? 'love' : 'happy', duration_ms: 900
   };
   if (choice === 'acknowledge_person' || choice === 'delight') return {
     intent: choice, target: { kind: 'person', device_id: null }, thought: shy ? '気づいているよ。少し照れるけれど、小さく応えよう。' : '気づいてもらえてうれしい。こちらからも応えたい！',
-    display_text: choice === 'delight' ? 'うれしさを短いしぐさで表す' : '相手へ小さくうなずく', action: choice === 'delight' ? 'happy' : 'nod', expression: choice === 'delight' ? 'happy' : shy ? 'neutral' : 'happy', duration_ms: 900
+    display_text: choice === 'delight' ? 'うれしさを短いしぐさで表す' : '相手へ小さくうなずく', action: choice === 'delight' ? 'happy' : 'nod', expression: choice === 'delight' ? personality === 'playful' ? 'love' : 'happy' : shy ? 'neutral' : personality === 'playful' ? 'wink' : 'happy', duration_ms: 900
   };
   if (choice === 'avert') return {
     intent: 'avert', target: { kind: 'person', device_id: null },
@@ -42,7 +42,7 @@ export function planFor(choice: string, personality: Personality): Plan {
   };
   if (choice === 'rest') return {
     intent: 'rest', target: noTarget(), thought: '今は少しゆっくりしていたい。', display_text: '穏やかな表情で待つ',
-    action: 'idle', expression: 'neutral', pan: 0, tilt: 0, duration_ms: 700
+    action: 'idle', expression: quiet ? 'sleepy' : 'neutral', pan: 0, tilt: 0, duration_ms: 700
   };
   return {
     intent: 'observe', target: { kind: 'person', device_id: null },

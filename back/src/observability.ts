@@ -5,7 +5,13 @@ type Context = { room: string; id: string; stream: string | null };
 function emit(event: string, context: Context, fields: object) {
   console.log({ event, room: context.room, device_id: context.id, stream_id: context.stream, ...fields });
 }
-export function logConnection(context: Context, online: boolean) { emit('device_connection', context, { online }); }
+const closeReasons = new Set(['status_timeout','controller_timeout','session_expired','replaced','slow_viewer','frame_too_large','invalid_raw_frame','message_too_large']);
+export function logConnection(context: Context, online: boolean, close?: { code: number; reason: string }) {
+  emit('device_connection', context, { online, ...(close ? { close_code: close.code, close_reason: closeReasons.has(close.reason) ? close.reason : '' } : {}) });
+}
+export function logCloseRequested(context: Context, role: string, code: number, reason: string) {
+  emit('peer_close_requested', context, { role, code, reason: closeReasons.has(reason) ? reason : '' });
+}
 export function logRun(context: Context, run: Pipeline) {
   for (const sample of run.api) emit('openai_call', context, {
     run_id: run.id, frame_id: run.frame_id, stage: sample.stage, endpoint: sample.endpoint,

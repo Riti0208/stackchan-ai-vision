@@ -5,7 +5,7 @@ import { APIDebugCache, type APIDebug } from './api-debug.ts';
 import { parseRawFrame, encodeRawFrame, LatestFrames, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
 import { FrameWindow } from './frame-window';
 import { monitorHTML, monitorJS } from './monitor';
-import { logConnection, logRun, logTransport } from './observability';
+import { logCloseRequested, logConnection, logRun, logTransport } from './observability';
 import { serializeServer, parseClientMessage, isHeadCommand, type HeadResponse, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
 import { paidSession, reservePaidCall, guardedFetch, controlledBudget, updatePaidSession, type BudgetStatus, type ControlledPaidEnv } from './paid-session';
 import { newHistory, newTransport, recordRun, receiveFrame, addSample, pacing, snapshot, type History, type Transport, type Pipeline, type Stage } from './telemetry';
@@ -21,7 +21,7 @@ interface Env extends ControlledPaidEnv {
 }
 type Config = Record<string, { control_token: string; devices: Record<string, string>; profiles?: Record<string, Personality> }>;
 type Action = ServerData['action']['action'];
-type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; frames: FrameWindow; lastMetricsRequest?: number; lastDebugRequest?: number; monitor?: boolean };
+type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; room: string; sid?: string; expires?: number; seen: number; frames: FrameWindow; lastMetricsRequest?: number; lastDebugRequest?: number; monitor?: boolean };
 type Device = {
   id: string; room: string; mind: Mind; behavior?: Behavior; inbox: Dialogue[]; experienced: Set<string>; greeted: Set<string>; publicHistory: Dialogue[];
   peer?: Peer; stream: string | null; viewers: Set<Peer>; controller?: Peer;
@@ -42,7 +42,10 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
 const fail = (status: number, code: string, message = code) => json({ error: { code, message } }, status);
 const config = (env: Env): Config => Object.assign(Object.create(null), JSON.parse(env.ROOM_CONFIG || '{}'));
 function send<K extends keyof ServerData>(p: Peer, type: K, data: ServerData[K]) { try { p.ws.send(serializeServer(type, data)); } catch { /* close cleans up */ } }
-function close(p: Peer, code: number, reason: string) { try { p.ws.close(code, reason); } catch { /* already closed */ } }
+function close(p: Peer, code: number, reason: string) {
+  logCloseRequested({ room: p.room, id: p.id, stream: null }, p.role, code, reason);
+  try { p.ws.close(code, reason); } catch { /* already closed */ }
+}
 async function equal(a: string, b: string) {
   const [x, y] = await Promise.all([a, b].map(s => crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))));
   const xa = new Uint8Array(x), ya = new Uint8Array(y); let difference = 0;
@@ -296,7 +299,7 @@ export class Room {
     const pair = new WebSocketPair(), [client, server] = Object.values(pair);
     server.binaryType = 'arraybuffer';
     server.accept();
-    const p: Peer = { ws: server, role, id, sid, expires: Number(req.headers.get('X-Expires')), seen: Date.now(), frames: new FrameWindow(), monitor: req.headers.get('X-Monitor') === 'true' };
+    const p: Peer = { ws: server, role, id, room, sid, expires: Number(req.headers.get('X-Expires')), seen: Date.now(), frames: new FrameWindow(), monitor: req.headers.get('X-Monitor') === 'true' };
     if (role === 'device') {
       if (d.peer) close(d.peer, 4001, 'replaced');
       this.cancelConversations(id);
@@ -324,16 +327,16 @@ export class Room {
     if (role !== 'device') { send(p, 'stream', { stream_id: d.stream }); send(p, 'emotion', d.emotion); send(p, 'device_status', d.status); send(p, 'mind', d.mind); send(p, 'behavior', d.behavior || null); send(p, 'dialogue_history', { messages: this.dialogue }); send(p, 'memory', this.memory(d)); send(p, 'telemetry', this.telemetry(d)); }
     if (p.monitor) for (const activity of this.activeAPICalls.values()) if (activity.device_id === id) send(p, 'api_activity', activity);
     server.addEventListener('message', event => this.message(p, d, event.data));
-    const cleanup = () => this.cleanup(p, d);
-    server.addEventListener('close', cleanup); server.addEventListener('error', cleanup);
+    server.addEventListener('close', event => this.cleanup(p, d, { code: event.code, reason: event.reason }));
+    server.addEventListener('error', () => this.cleanup(p, d));
     if (!this.timer) this.timer = setInterval(() => this.tick(), 500);
     return new Response(null, { status: 101, webSocket: client });
   }
-  private cleanup(p: Peer, d: Device) {
+  private cleanup(p: Peer, d: Device, close?: { code: number; reason: string }) {
     if (p.role === 'device' && d.peer === p) {
       d.evaluation?.abort(); d.follow = undefined;
       if (this.rawFrames.cancel(d.id)) d.transport.conversion_dropped++;
-      logConnection(d, false);
+      logConnection(d, false, close);
       this.cancelConversations(d.id);
       d.mind = { ...d.mind, revision: d.mind.revision + 1, intent: 'rest', target: { kind: 'none', device_id: null }, valid_until: 0 }; d.behavior = undefined;
       d.peer = undefined; d.stream = null; d.latest = undefined; d.frames.clear(); d.status = offline();

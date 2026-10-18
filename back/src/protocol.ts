@@ -6,7 +6,7 @@ import type { APIDebug } from './api-debug.ts';
 import type { CallMetrics } from './openai.ts';
 import type { APISample, Stage, snapshot } from './telemetry.ts';
 export const actions = ['idle', 'look_at', 'nod', 'shake', 'happy'] as const;
-export const expressions = ['neutral', 'happy', 'sad', 'surprised', 'thinking'] as const;
+export const expressions = ['neutral', 'happy', 'sad', 'surprised', 'thinking', 'sleepy', 'love', 'wink'] as const;
 export const headActions = ['left', 'right', 'up', 'down', 'center', 'resume'] as const;
 export type HeadAction = typeof headActions[number];
 export type HeadResponse = { ok: true; device_id: string; pan: number; tilt: number; seq: number; manual_until: number };

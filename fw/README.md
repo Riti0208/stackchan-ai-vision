@@ -10,8 +10,11 @@ actions, moves the neck within small limits, and draws the selected expression.
 - Captures the GC0308 camera at QQVGA 160x120 RGB565 and sends the framebuffer
   without JPEG encoding using the `SCFW` v2 raw-frame packet and 32-bit
   big-endian frame ID.
+- Disables Wi-Fi modem sleep, requests 19.5 dBm transmit power, and keeps three
+  PSRAM camera buffers to reduce radio and camera-DMA stalls.
 - Upload FPS depends on capture, the 38,400-byte raw transfer, and Wi-Fi; the
-  serial `upload_fps` field reports the measured rate.
+  serial `upload_fps` field reports the measured rate. `capture_fps` and
+  `capture_ms` separate camera acquisition from upload time.
 - Keeps only the newest unsent frame. Frames older than one second or from an
   earlier connection are discarded. The target is capped at 60 fps; actual
   delivery may be lower when the camera or network cannot keep up.
@@ -24,7 +27,7 @@ actions, moves the neck within small limits, and draws the selected expression.
   tilt to ±15 degrees around neutral; tracking and gestures use a faster,
   responsive movement curve while staying inside those limits.
   Gestures finish before the head returns to the latest tracking target.
-- Draws neutral/happy/sad/surprised/thinking faces. Press `V` in the serial
+- Draws neutral/happy/sad/surprised/thinking/sleepy/love/wink faces. Press `V` in the serial
   monitor to toggle the camera preview; the default screen shows the face.
 - Returns to neutral and centers the head when Wi-Fi or WSS is lost.
 

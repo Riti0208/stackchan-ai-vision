@@ -39,6 +39,7 @@ test('detection validates face IDs, geometry, max count and deterministic primar
 test('FW accepts bounded commands/session/frame ACK/error and ignores malformed or private messages', () => {
   const command = { seq: 1, action: 'nod', pan: -1, tilt: 1, expression: 'neutral', duration_ms: 100 };
   assert.equal(parseDeviceServerMessage(serializeServer('action', command)).type, 'action');
+  for (const expression of ['sleepy', 'love', 'wink']) assert.equal(parseDeviceServerMessage(wire('action', { ...command, expression })).type, 'action');
   for (const patch of [{ seq: 0 }, { seq: -1 }, { pan: 1.01 }, { tilt: -1.01 }, { duration_ms: 99 }, { duration_ms: 3001 }, { duration_ms: 100.5 }, { expression: 'angry' }, { action: 'run' }]) assert.equal(parseDeviceServerMessage(wire('action', { ...command, ...patch })), null);
   assert.equal(parseDeviceServerMessage(wire('frame_received', { stream_id: 's', frame_id: 0 } )).type, 'frame_received');
   assert.equal(parseDeviceServerMessage(wire('session', { protocol_version: 2, frame_format: 'rgb565le-v2', width: 160, height: 120, room: 'main', device_id: 'robot', role: 'device' })).type, 'session');

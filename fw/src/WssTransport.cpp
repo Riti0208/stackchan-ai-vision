@@ -97,6 +97,7 @@ void closeSocket() {
 void onSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   if (type == WStype_CONNECTED) {
     connectedAt = millis();
+    lastStatusAt = connectedAt;
     lastAcceptedSeq = 0;
     statusSent = false;
     sessionReady.store(false);
@@ -111,7 +112,17 @@ void onSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     Serial.printf("WSS connected connections=%u; awaiting session\n", count);
   } else if (type == WStype_DISCONNECTED) {
     markOffline();
-    Serial.println("WSS disconnected / connect failed; retry in 5s when Wi-Fi is online");
+    char reason[65] = "transport_closed";
+    if (payload && length) {
+      const size_t count = length < sizeof(reason) - 1 ? length : sizeof(reason) - 1;
+      for (size_t i = 0; i < count; ++i) {
+        const uint8_t ch = payload[i];
+        reason[i] = ch >= 32 && ch <= 126 ? static_cast<char>(ch) : '?';
+      }
+      reason[count] = '\0';
+    }
+    Serial.printf("WSS disconnected reason=%s connected_ms=%u status_age_ms=%u; retry in 5s\n",
+                  reason, millis() - connectedAt, millis() - lastStatusAt);
   } else if (type == WStype_ERROR) {
     // Never print raw transport errors: they could reflect headers or URL contents.
     Serial.println("WSS transport error (check DNS / clock / CA / device token / server)");
@@ -288,7 +299,9 @@ void startWssTransport() {
     Serial.println("WSS frame/action allocation failed; remaining safely idle");return;
   }
 #endif
-  if (xTaskCreatePinnedToCore(networkTask, "wss_task", 12288, nullptr, 1, nullptr, 0) != pdPASS) {
+  // Keep WSS servicing ahead of the Arduino app loop without outranking the
+  // ESP-IDF Wi-Fi/TCP tasks that actually move bytes over the radio.
+  if (xTaskCreatePinnedToCore(networkTask, "wss_task", 12288, nullptr, 2, nullptr, 0) != pdPASS) {
     Serial.println("WSS task creation failed (insufficient internal memory)");
 #if FW_STAGE >= 6
     for(auto& frame:slots) {heap_caps_free(frame.data);frame.data=nullptr;}

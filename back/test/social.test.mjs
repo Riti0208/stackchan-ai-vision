@@ -33,6 +33,11 @@ test('an acknowledgement causes a nonverbal reaction, not another utterance', ()
 test('turning away is a held absolute gaze target, independent of face coordinates', () => {
   const p = planFor('avert', 'shy'); assert.equal(p.pan, -.35); assert.equal(p.tilt, 0); assert.equal(p.intent, 'avert');
 });
+test('playful personality uses added wink and love faces; calm rest uses sleepy face', () => {
+  assert.equal(planFor('greet:other', 'playful').expression, 'wink');
+  assert.equal(planFor('reply:other', 'playful').expression, 'love');
+  assert.equal(planFor('rest', 'calm').expression, 'sleepy');
+});
 
 test('first-join random selection covers all six profiles; explicit profiles bypass the draw', async () => {
   const { personalityKeys, choosePersonality, personalities } = await import('../src/personality.ts');

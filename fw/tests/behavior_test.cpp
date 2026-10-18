@@ -1,6 +1,7 @@
 #include "../src/Behavior.h"
 #include <cassert>
 #include <cmath>
+#include <string>
 
 using namespace stackchan_fw;
 
@@ -12,6 +13,14 @@ static ActionCommand command(uint32_t seq, Action action, float pan, float tilt,
 }
 
 int main() {
+  for (const char* name : {"sleepy", "love", "wink"}) {
+    Expression expression = Expression::Neutral;
+    assert(parseExpression(name, expression));
+    assert(std::string(expressionName(expression)) == name);
+  }
+  Expression invalidExpression = Expression::Neutral;
+  assert(!parseExpression("angry", invalidExpression));
+
   Behavior b;
   b.idle(0);
   auto tracking=command(1,Action::LookAt,1.0f,-1.0f,1000,0);
