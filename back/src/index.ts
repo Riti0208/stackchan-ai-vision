@@ -1,4 +1,4 @@
-import { behaviorMode, manualTarget, coarseTarget, detectedTarget, followFresh, FOLLOW_MAX_AGE_MS, FOLLOW_INTERVAL_MS, type FollowGate } from './follow-person.ts';
+import { behaviorMode, manualTarget, coarseTarget, followFresh, FOLLOW_MAX_AGE_MS, type FollowGate } from './follow-person.ts';
 import { APIDebugCache, type APIDebug } from './api-debug.ts';
 import { parseRawFrame, encodeRawFrame, LatestFrames, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
 import { FrameWindow } from './frame-window';
@@ -379,12 +379,9 @@ export class Room {
       const frame = d.frames.get(a.frame_id);
       if (a.stream_id !== d.stream || !frame || Date.now() - frame.at > 3000 || frame.order <= d.detectedOrder) return;
       d.detectedOrder = frame.order; d.lastDetection = Date.now();
-      if (behaviorMode(this.env) === 'follow_person') {
-        if (Date.now() < (d.manualUntil || 0) || !primary || !followFresh(d.follow, d.stream, Date.now()) || frame.order < d.follow!.order || Date.now() - (d.lastFollowAt || 0) < FOLLOW_INTERVAL_MS) return;
-        const target = detectedTarget(d.pan, d.tilt, primary);
-        if (target) { d.pan = target.pan; d.tilt = target.tilt; d.lastFollowAt = Date.now(); this.action(d, 'look_at', 'thinking', 250, '人物に追従', undefined, true); }
-        return;
-      }
+      // In follow mode only Decisions perception chooses steering. FE coordinates
+      // may describe another frame/target and must never override its direction.
+      if (behaviorMode(this.env) === 'follow_person') return;
       if (Date.now() < (d.manualUntil || 0) || d.gestureUntil > Date.now() || d.mind.intent !== 'observe') return;
       if (!primary) { this.action(d, 'idle', 'neutral', 500); return; }
       d.pan = clamp(d.pan + (primary.x + primary.width / 2 - .5) * .3, -1, 1);

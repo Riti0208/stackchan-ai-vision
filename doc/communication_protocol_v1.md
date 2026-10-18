@@ -675,7 +675,7 @@ rawは38416 bytes/枚で、60fpsなら約18.44Mbps/台（WS/TLS/TCP別）。60fp
 Env `BEHAVIOR_MODE=follow_person|autonomous`。今回の公開/ローカルはfollow_person、既存自由判断はautonomousで保持する。health.behavior_mode、session.behavior_mode（追加optional項目）、一覧runtime.behavior_modeで観測できる。モード変更自体はAPIを開始しない。
 
 follow_personは同じperceptionのquestionsに`person_horizontal` choice（left/center/right/unknown）と`person_vertical` choice（upper/center/lower/unknown）を追加する。返却は既存choiceの`choice`/`confidence`。最大の見える顔、顔が明瞭でなければ最大の人物の同じ中心を対象とする。中央40〜60%は保持し、正確な座標/bboxは推定させない。person_present>=0.5、各軸confidence>=0.65でpan±0.08、tilt±0.06の有界stepをperception直後に反映する。
-人物有りgateは元画像受信から最大6000msかつsession期限まで。同一stream/新しい評価だけを適用し、停止済み応答は捨てる。FE補助はgateが新鮮な場合だけ、顔confidence>=0.7、最大10Hz、中央dead zone/同じ最大stepで受け付ける。全角度は[-1,1]。公開paid control環境のAPI OFF時は追従待機、ローカルmockだけデモ追従する。既存の明示開始・期限・予算・停止を維持する。
+人物有りgateは元画像受信から最大6000msかつsession期限まで。同一stream/新しい評価だけを適用し、停止済み応答は捨てる。follow_personではFE detectionによる首の更新は行わず、Decisions応答だけで方向を決定する。送信画像座標を使い、左→pan負、右→pan正、上→tilt正、下→tilt負。鏡像や人物の身体基準に変換しない。autonomousの既存FE detection制御は維持する。全角度は[-1,1]。公開paid control環境のAPI OFF時は追従待機、ローカルmockだけデモ追従する。既存の明示開始・期限・予算・停止を維持する。
 
 `POST /api/control/head?room=<room>&device_id=<id>`は既存room Cookie認証とexact Origin、Content-Type application/jsonを要求する。本文は1024 bytes以下、`{"action":"left"}`のaction 1項目のみ。left/right/up/down/center/resumeを許可し、他キーや値を拒否する。未知room/deviceは404、未認証401、Origin違反403、不正入力400、超過413、offline409、100ms未満の連続操作429。controller leaseは取得しない。
 

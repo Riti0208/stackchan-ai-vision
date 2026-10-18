@@ -429,11 +429,11 @@ BEデプロイとv2 FW書き込みを協調する。**BE公開後〜FW更新完�
 
 追従は既存の同じperceptionリクエストに人物位置の左右/上下choiceを追加し、API呼び出し数を増やさない。最大の顔、顔が不明瞭なら最大の人物を対象とする粗い分類であり、bboxや正確な座標ではない。中央40〜60%は保持。person_present>=0.5かつ位置confidence>=0.65の軸を、pan±0.08/tilt±0.06ずつ[-1,1]内で更新する。perception直後にlook_atを送り、意向/文章生成を待たない。感情・本音・会話の更新は維持し、性格・avert・heldやsocial gestureが首を上書きしない。
 
-FE controllerは必須ではない。有効なFE detectionは新鮮な人物有り判定をgateに、顔confidence>=0.7、最大10Hz、同じdead zoneとstep上限で補助する。元画像受信から最大6秒・同一stream・API期限内のみ有効。受信frame metadataは最大192件/3秒で、画像キューではない。人無し、位置不確実、期限・世代・停止で追従更新を止める。有効な追従targetだけ1秒ごとに同じ角度を再送し、FWの3秒watchdogに対応する。期限後は再送しない。
+FE controllerは必須ではない。follow_personではFE detectionによる首の更新を行わず、Decisionsのperson_horizontal/person_verticalだけから方向を決める。送信画像上の左→pan負、右→pan正、上→tilt正、下→tilt負とし、鏡像や人の身体基準に読み替えない。元画像受信から最大6秒・同一stream・API期限内のみ有効。人無し、位置不確実、期限・世代・停止で追従更新を止める。有効な追従targetだけ1秒ごとに同じ角度を再送し、FWの3秒watchdogに対応する。期限後は再送しない。
 
 `ENABLE_PAID_CONTROL=true`の公開環境はAPI開始前/OFF/停止後に追従待機し、mockの架空人物で実機を動かさない。ローカルmock（paid controlなし）は追従デモが動く。明示開始・期限・回数上限・停止ガードは維持し、最後に予約された有効なAPI応答も使用する。
 
-追従は60fpsのリアルタイム制御ではない。従来実測のperception約2.7秒で最初のstepを出せるが、次の評価は既存の単一runが終わってからなので、意向約0.45秒・文章約2.8秒の待ちが次回cadenceに残りうる。FE座標が有効ならその間を補助できる。今回のテストは偽APIであり、実APIの追加質問後の遅延は未測定。
+追従は60fpsのリアルタイム制御ではない。従来実測のperception約2.7秒で最初のstepを出せるが、次の評価は既存の単一runが終わってからなので、意向約0.45秒・文章約2.8秒の待ちが次回cadenceに残りうる。FE座標による補助は行わない。今回のテストは偽APIであり、実APIの追加質問後の遅延は未測定。
 
 認証済みモニターの手動操作は`POST /api/control/head?room=...&device_id=...`へ`{"action":"left|right|up|down|center|resume"}`を送る。API OFFでも使用可。左右上下は現在の指令targetから0.2ずつ、centerは0/0。look_at 500ms、既存expressionを保持しseqを更新する。10秒間は全自動の首・内部角度更新を止め、1秒keepaliveでtargetを維持する。resumeは解除のみで新しいseqを発行しない。再接続は手動状態をクリアする。HTTPのokは指令targetの受付であり、FW到達/実行はaction_ackで別途確認する。
 

@@ -360,5 +360,5 @@ Cloudflareには接続イベント、約5秒ごとの通信サマリー、APIご
 
 ## 動作確認用follow_personモード
 
-今回の既定Envはfollow_person。Decisionsの同じperception内で人物位置を粗く分類し、応答直後に有界のlook_atを出す。FEなしでも追従し、FE座標は新鮮な人物有りgate下で補助できる。person無し/不確実/古い画像/停止後は更新しない。性格や自由意向は感情・本音・会話へ残すが、首の追従を上書きしない。従来の自由判断はautonomousで保持する。リアルタイム60fps追従の達成を意味しない。
+今回の既定Envはfollow_person。Decisionsの同じperception内で人物位置を粗く分類し、応答直後に有界のlook_atを出す。FEなしでも追従し、方向はDecisions応答だけで決める。FE座標は追従指令を上書きしない。送信画像の左/右/上/下をpan負/正・tilt正/負に対応させる。person無し/不確実/古い画像/停止後は更新しない。性格や自由意向は感情・本音・会話へ残すが、首の追従を上書きしない。従来の自由判断はautonomousで保持する。リアルタイム60fps追従の達成を意味しない。
 認証済みモニターから手動の左右上下/中央とresumeを操作でき、手動後10秒は自動head更新より優先する。実機ACKとHTTP受付を分けて扱う。具体的な閾値/認証/keepaliveは[通信仕様](communication_protocol_v1.md)を参照。

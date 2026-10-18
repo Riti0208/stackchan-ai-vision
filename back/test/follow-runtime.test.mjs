@@ -40,17 +40,24 @@ test('follow moves before slow social requests without FE, shy avert cannot over
  }finally{await h.close();}}
 });
 
+test('Decisions image directions reach FW commands with matching signs without FE',{timeout:16000},async()=>{
+ for(const [x,y,pan,tilt] of [['left','center',-.08,0],['right','center',.08,0],['center','upper',0,.06],['center','lower',0,-.06]]){
+  const h=await harness();h.state.x=x;h.state.y=y;
+  try{const d=await h.connect();d.frame(0);const action=await d.wait(m=>m.type==='action');assert.equal(action.data.pan,pan,`image ${x}/${y}: pan`);assert.equal(action.data.tilt,tilt,`image ${x}/${y}: tilt`);}finally{await h.close();}
+ }
+});
+
 test('local mock follows but controlled API OFF never invents real-device follow or starts upstream',{timeout:12000},async()=>{
  for(const controlled of [false,true]){const h=await harness({mock:true,controlled});try{const d=await h.connect();d.frame(0);if(controlled){await sleep(1300);assert.equal(d.actions().length,0);}else assert.equal((await d.wait(m=>m.type==='action')).data.action,'look_at');assert.equal(h.requests.length,0);}finally{await h.close();}}
 });
 
-test('center holds, unknown/no-person suppress steps; FE assistance needs fresh gated presence',{timeout:22000},async()=>{
+test('center holds, unknown/no-person suppress steps; contradictory FE coordinates never override Decisions steering',{timeout:22000},async()=>{
  const h=await harness();try{
   const d=await h.connect(),c=await h.connect('controller');d.frame(0);await d.wait(m=>m.type==='action');h.state.x='center';h.state.y='center';d.frame(1);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=2);await sleep(200);assert.ok(d.actions().every(m=>m.data.pan===.08&&m.data.tilt===.06));
   h.state.x='unknown';h.state.y='unknown';d.frame(2);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=3);await sleep(300);const unknown=d.actions().length;await sleep(300);assert.equal(d.actions().length,unknown);
   h.state.presence=0;d.frame(3);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=4);await sleep(200);const n=d.actions().length,stream=(await c.wait(m=>m.type==='stream'&&m.data.stream_id)).data.stream_id;
   const detect=id=>c.send('detection',{stream_id:stream,frame_id:id,faces:[{id:0,x:0,y:.8,width:.1,height:.1,confidence:.95}],primary_face_id:0});detect(3);await sleep(150);assert.equal(d.actions().length,n);
-  h.state.presence=.9;h.state.x='right';h.state.y='upper';d.frame(4);await until(()=>d.actions().length>n);await sleep(150);const pan=d.actions().at(-1).data.pan;detect(4);await until(()=>d.actions().at(-1).data.pan<pan);
+  h.state.presence=.9;h.state.x='right';h.state.y='upper';d.frame(4);await until(()=>d.actions().length>n);await sleep(150);const pan=d.actions().at(-1).data.pan;const tilt=d.actions().at(-1).data.tilt;for(let i=0;i<4;i++){detect(4);await sleep(120);}assert.equal(d.actions().at(-1).data.pan,pan);assert.equal(d.actions().at(-1).data.tilt,tilt);
   await sleep(6100);h.state.delay=2000;const expired=d.actions().length;d.frame(5);await until(()=>c.frames.includes(5));detect(5);await sleep(250);assert.equal(d.actions().length,expired);
  }finally{await h.close();}
 });
