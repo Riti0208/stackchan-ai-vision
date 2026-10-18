@@ -2,6 +2,7 @@
  * Timestamps and durations are milliseconds; angles are normalized [-1,1], not degrees.
  * TypeScript types do not validate JSON: use the parsers at the network boundary.
  */
+import type { APIDebug } from './api-debug.ts';
 import type { CallMetrics } from './openai.ts';
 import type { APISample, Stage, snapshot } from './telemetry.ts';
 export const actions = ['idle', 'look_at', 'nod', 'shake', 'happy'] as const;
@@ -131,9 +132,10 @@ export interface ClientData {
     detection: Detection;
     heartbeat: Empty;
     telemetry_request: Empty;
+    api_debug_request: { run_id: string; stage: Stage };
 }
 export type DeviceMessageType = 'device_status' | 'action_ack';
-export type ViewerMessageType = 'frame_ack' | 'telemetry_request';
+export type ViewerMessageType = 'frame_ack' | 'telemetry_request' | 'api_debug_request';
 export type ControllerMessageType = ViewerMessageType | 'detection' | 'heartbeat';
 export type TelemetrySnapshot = ReturnType<typeof snapshot>;
 export type TelemetrySummary = Omit<TelemetrySnapshot, 'samples'>;
@@ -205,6 +207,7 @@ export interface ServerData {
         call_id: string; run_id: string; stream_id: string; device_id: string;
         stage: Stage; endpoint: CallMetrics['endpoint']; model: string;
     } & ({ state: 'started'; started_at: number } | { state: 'completed'; sample: APISample });
+    api_debug: { device_id: string; run_id: string; stage: Stage; detail: APIDebug | null };
     telemetry: TelemetrySummary;
     telemetry_snapshot: TelemetrySnapshot;
 }
@@ -225,7 +228,7 @@ export const clientRoles: {
     [K in keyof ClientData]: readonly Role[];
 } = {
     device_status: ['device'], action_ack: ['device'], frame_ack: ['viewer', 'controller'],
-    telemetry_request: ['viewer', 'controller'], detection: ['controller'], heartbeat: ['controller']
+    telemetry_request: ['viewer', 'controller'], api_debug_request: ['viewer'], detection: ['controller'], heartbeat: ['controller']
 };
 export function serializeClient(message: ClientMessage): string { return JSON.stringify(message); }
 export function serializeServer<K extends keyof ServerData>(type: K, data: ServerData[K]): string { return JSON.stringify({ type, timestamp: Date.now(), data }); }
@@ -258,7 +261,8 @@ const validators: {
     frame_ack: (v): v is ClientData['frame_ack'] => record(v) && frame(v),
     detection: isDetection,
     heartbeat: (v): v is Empty => record(v),
-    telemetry_request: (v): v is Empty => record(v)
+    telemetry_request: (v): v is Empty => record(v),
+    api_debug_request: (v): v is ClientData['api_debug_request'] => record(v) && typeof v.run_id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(v.run_id) && ['perception', 'intention', 'narration'].includes(v.stage as string)
 };
 function parseEnvelope(raw: string): Record<string, unknown> | null {
     try {
@@ -282,7 +286,7 @@ export function parseClientMessage(raw: string, role: Role): ClientParseResult {
     const v = parseEnvelope(raw), invalid = { ok: false, code: 'invalid_message', fatal: false } as const;
     if (!v || typeof v.type !== 'string')
         return invalid;
-    if (['action', 'emotion', 'decision', 'session', 'stream', 'error', 'mind', 'behavior', 'dialogue', 'dialogue_history', 'memory', 'human_action', 'telemetry', 'telemetry_snapshot', 'frame_received'].includes(v.type))
+    if (['action', 'emotion', 'decision', 'session', 'stream', 'error', 'mind', 'behavior', 'dialogue', 'dialogue_history', 'memory', 'human_action', 'telemetry', 'telemetry_snapshot', 'frame_received', 'api_activity', 'api_debug'].includes(v.type))
         return { ok: false, code: 'forbidden', fatal: true };
     if (!Object.hasOwn(validators, v.type))
         return { ok: false, code: 'unknown_type', fatal: false };

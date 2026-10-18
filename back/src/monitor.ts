@@ -2,19 +2,21 @@
 export const monitorHTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>StackChan 部屋モニター</title><style>
-:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10151e;color:#e4ebf5}body{max-width:1200px;margin:auto;padding:28px}h1{font-size:26px;margin:0 0 8px}h2{font-size:18px}p{line-height:1.7;color:#aab9cb}form{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:24px 0}label{display:grid;gap:6px;font-size:13px}input,button{font:inherit;border:1px solid #41516a;border-radius:7px;padding:10px;background:#182231;color:inherit}button{cursor:pointer;background:#214d74}button:disabled{opacity:.5;cursor:default}#state{color:#80d1bf}#devices{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:18px}.card{background:#182231;border:1px solid #304058;border-radius:12px;padding:20px;min-width:0}.card p{white-space:pre-wrap;overflow-wrap:anywhere}dl{display:grid;grid-template-columns:1fr 1fr;font-size:14px;gap:9px}dt{color:#aab9cb}dd{margin:0;text-align:right}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 4px;border-bottom:1px solid #304058}.scroll{overflow:auto}#events{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;max-height:350px;overflow:auto;background:#182231;padding:16px;border-radius:8px}small{color:#aab9cb}a{color:#80c8ff}
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10151e;color:#e4ebf5}body{max-width:1200px;margin:auto;padding:28px}h1{font-size:26px;margin:0 0 8px}h2{font-size:18px}p{line-height:1.7;color:#aab9cb}form{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:24px 0}label{display:grid;gap:6px;font-size:13px}input,button{font:inherit;border:1px solid #41516a;border-radius:7px;padding:10px;background:#182231;color:inherit}button{cursor:pointer;background:#214d74}button:disabled{opacity:.5;cursor:default}#state{color:#80d1bf}#devices{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:18px}.card{background:#182231;border:1px solid #304058;border-radius:12px;padding:20px;min-width:0}.card p{white-space:pre-wrap;overflow-wrap:anywhere}dl{display:grid;grid-template-columns:1fr 1fr;font-size:14px;gap:9px}dt{color:#aab9cb}dd{margin:0;text-align:right}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 4px;border-bottom:1px solid #304058}.scroll{overflow:auto}#events{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;max-height:350px;overflow:auto;background:#182231;padding:16px;border-radius:8px}small{color:#aab9cb}a{color:#80c8ff}.debug-json{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;font-size:12px;background:#10151e;padding:14px;border-radius:8px}#api-detail{margin:20px 0}#api-detail h3{font-size:15px}#api-detail-status{color:#aab9cb}
 </style><script src="/monitor/app.js" defer></script></head><body>
 <h1>StackChan 部屋モニター</h1><p>部屋ごとの接続・通信・感情とAPIの実行状況を観察します。</p>
 <form id="login"><label>ルーム<input id="room" value="main" required pattern="[a-z0-9](?:[a-z0-9_]|-){0,31}" maxlength="32"></label><label>部屋のトークン<input id="token" type="password" required autocomplete="off"></label><button id="connect">接続</button><button type="button" id="disconnect" disabled>切断</button></form>
 <p id="state" role="status" aria-live="polite">未接続</p><p id="health"></p>
 <section id="paid-control" hidden><h2>実APIのデバッグ</h2><p>全ルーム・全個体で共通。開始後はカメラ画像をOpenAIへ送信し、利用料が発生します。画面を閉じても期限まで継続するため、終了時は停止してください。</p><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end"><label>有効時間（秒）<input id="paid-seconds" type="number" min="1" max="600" value="300"></label><label>API呼び出し上限<input id="paid-calls" type="number" min="1" max="1000" value="100"></label><button id="paid-start" type="button" disabled>実APIを開始（課金あり）</button><button id="paid-stop" type="button" disabled>実APIを停止</button></div><p id="paid-result" role="status" aria-live="polite"></p></section>
-<h2>OpenAI APIの呼び出し</h2><p>個体・処理段階ごとの直近100件。呼び出し中と完了結果を更新します。</p><div class="scroll"><table><thead><tr><th>開始時刻</th><th>個体 / 段階</th><th>状態 / HTTP</th><th>RTT</th><th>トークン 入力 / 出力</th><th>request ID</th></tr></thead><tbody id="api-calls"></tbody></table></div>
-<section id="devices" aria-label="デバイス一覧"></section><h2>イベント</h2><small>直近100件。APIの履歴はサーバーに保持された直近120件から表示します。</small><pre id="events"></pre>
+<h2>OpenAI APIの呼び出し</h2><p>個体・処理段階ごとの直近100件。呼び出し中と完了結果を更新します。</p><div class="scroll"><table><thead><tr><th>開始時刻</th><th>個体 / 段階</th><th>状態 / HTTP</th><th>RTT</th><th>トークン 入力 / 出力</th><th>request ID</th><th>詳細</th></tr></thead><tbody id="api-calls"></tbody></table></div>
+<section id="api-detail" class="card" hidden aria-label="APIリクエストとレスポンスの詳細"><button id="api-detail-close" type="button">詳細を閉じる</button><h2 id="api-detail-title"></h2><p id="api-detail-status" role="status" aria-live="polite"></p><div id="api-detail-body"></div></section>
+<section id="devices" aria-label="デバイス一覧"></section><h2>イベント</h2><small>直近100件。本文詳細は直近20件・10分以内、合計1MiBまで。画像は形式とサイズのみ表示します。APIの履歴はサーバーに保持された直近120件から表示します。</small><pre id="events"></pre>
 </body></html>`;
 export const monitorJS = String.raw`
 'use strict';
 const $ = id => document.getElementById(id);
 const sockets = new Map(), cards = new Map(), events = [], seenCalls = new Set(), seenDialogue = new Set(), apiRows = new Map();
+let selectedDebug = null, debugTimer;
 let paidBusy = false, lastHealth = null, paidError = '';
 let running = false, generation = 0, healthTimer, listTimer, currentRoom = '';
 function text(tag, value, parent) { const element = document.createElement(tag); element.textContent = String(value); parent.append(element); return element; }
@@ -22,13 +24,35 @@ function event(device, message) { events.push(new Date().toLocaleTimeString() + 
 function dialogue(message) { if(seenDialogue.has(message.id))return; seenDialogue.add(message.id); if(seenDialogue.size>200)seenDialogue.delete(seenDialogue.values().next().value); event(message.from_device_id,'→ '+message.to_device_id+' 「'+message.text+'」'); }
 function apiCall(id,stage,run,state,sample) {
   const key=id+':'+run+':'+stage;
-  apiRows.set(key,{id,stage,state,...sample});if(apiRows.size>100){const oldest=[...apiRows.entries()].sort((a,b)=>a[1].started_at-b[1].started_at)[0][0];apiRows.delete(oldest);}
+  apiRows.set(key,{id,stage,run_id:run,state,...sample});if(apiRows.size>100){const oldest=[...apiRows.entries()].sort((a,b)=>a[1].started_at-b[1].started_at)[0][0];apiRows.delete(oldest);}
 }
 function renderAPI(){
   $('api-calls').replaceChildren();
   const rows=[...apiRows.values()].sort((a,b)=>b.started_at-a.started_at);
-  for(const item of rows){const row=text('tr','',$('api-calls'));[new Date(item.started_at).toLocaleTimeString(),item.id+' / '+item.stage,item.state==='started'?'呼び出し中':item.outcome+' / '+num(item.status),num(item.rtt_ms,' ms'),num(item.input_tokens)+' / '+num(item.output_tokens),item.request_id||'—'].forEach(v=>text('td',v,row));}
+  for(const item of rows){
+    const row=text('tr','',$('api-calls'));[new Date(item.started_at).toLocaleTimeString(),item.id+' / '+item.stage,item.state==='started'?'呼び出し中':item.outcome+' / '+num(item.status),num(item.rtt_ms,' ms'),num(item.input_tokens)+' / '+num(item.output_tokens),item.request_id||'—'].forEach(v=>text('td',v,row));
+    const button=text('button','JSONを見る',text('td','',row));button.type='button';button.disabled=item.state==='started'||!running;button.addEventListener('click',()=>inspectAPI(item));
+  }
 }
+function closeDebug(){clearTimeout(debugTimer);selectedDebug=null;$('api-detail').hidden=true;$('api-detail-body').replaceChildren();$('api-detail-title').textContent='';$('api-detail-status').textContent='';}
+function inspectAPI(item){
+  const entry=sockets.get(item.id);if(!running||!entry||entry.ws.readyState!==WebSocket.OPEN)return;
+  selectedDebug={id:item.id,run_id:item.run_id,stage:item.stage};$('api-detail').hidden=false;$('api-detail-title').textContent=item.id+' / '+item.stage+' · '+new Date(item.started_at).toLocaleTimeString();$('api-detail-body').replaceChildren();
+  $('api-detail-status').textContent='本文を取得中 · HTTP '+num(item.status)+' · request ID '+(item.request_id||'—');
+  clearTimeout(debugTimer);debugTimer=setTimeout(()=>{$('api-detail-status').textContent='本文を取得できませんでした。接続状態を確認して、もう一度選択してください。';},5000);
+  send(entry.ws,'api_debug_request',{run_id:item.run_id,stage:item.stage});
+}
+function showDebug(id,data){
+  if(!selectedDebug||selectedDebug.id!==id||selectedDebug.run_id!==data.run_id||selectedDebug.stage!==data.stage)return;
+  clearTimeout(debugTimer);const root=$('api-detail-body');root.replaceChildren();const detail=data.detail;
+  if(!detail){$('api-detail-status').textContent='本文詳細は保持期限・容量を超えたか、この呼び出しでは記録されていません。';return;}
+  const item=apiRows.get(id+':'+data.run_id+':'+data.stage);
+  $('api-detail-status').textContent=detail.method+' '+detail.url+' · HTTP '+num(item?.status)+' · RTT '+num(item?.rtt_ms,' ms')+' · request ID '+(item?.request_id||'—');
+  function body(label,value){text('h3',label,root);if(!value){text('p','応答本文なし（HTTP応答前の失敗、または本文なし）',root);return;}text('small',value.bytes+' bytes'+(value.truncated?' 以上 / 一部省略':'')+' · 画像省略 '+value.images_omitted+' 件',root);const pre=text('pre',JSON.stringify(value.body,null,2),root);pre.className='debug-json';}
+  body('リクエスト JSON',detail.request);body('レスポンス JSON',detail.response);
+  if(detail.error){text('h3','エラー詳細',root);const pre=text('pre',JSON.stringify(detail.error,null,2),root);pre.className='debug-json';}
+}
+$('api-detail-close').addEventListener('click',closeDebug);
 function num(value, suffix = '') { return value == null ? '—' : String(value) + suffix; }
 function pair(parent, label, value) { text('dt', label, parent); text('dd', value, parent); }
 function render(id) {
@@ -54,7 +78,7 @@ function render(id) {
   text('small','感情: ' + (data.emotion ? Object.entries(data.emotion).map(([k,v])=>k+' '+Number(v).toFixed(2)).join(' / ') : '—'),root);
 }
 function send(ws,type,data={}) { if(ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type,timestamp:Date.now(),data})); }
-function stop(message='切断しました') { running=false; generation++; clearInterval(healthTimer); clearInterval(listTimer); for(const entry of sockets.values()){clearTimeout(entry.timer); entry.ws.close();} sockets.clear(); for(const [id,card] of cards){card.connection='切断';render(id);} $('connect').disabled=false; $('disconnect').disabled=true; $('state').textContent=message; $('paid-control').hidden=true; }
+function stop(message='切断しました') { closeDebug();running=false;renderAPI(); generation++; clearInterval(healthTimer); clearInterval(listTimer); for(const entry of sockets.values()){clearTimeout(entry.timer); entry.ws.close();} sockets.clear(); for(const [id,card] of cards){card.connection='切断';render(id);} $('connect').disabled=false; $('disconnect').disabled=true; $('state').textContent=message; $('paid-control').hidden=true; }
 function attach(id, ownGeneration) {
   if(!running || generation!==ownGeneration || sockets.has(id))return;
   if(!cards.has(id)) {const root=text('article','',$('devices'));root.className='card';cards.set(id,{root,data:{},connection:'接続中'});}
@@ -65,6 +89,7 @@ function attach(id, ownGeneration) {
   ws.onmessage=e=>{
     if(generation!==ownGeneration || typeof e.data!=='string')return;
     const m=JSON.parse(e.data);
+    if(m.type==='api_debug')showDebug(id,m.data);
     if(m.type==='api_activity')apiCall(id,m.data.stage,m.data.run_id,m.data.state,m.data.state==='started'?{started_at:m.data.started_at}:m.data.sample);
     if(m.type==='device_status' && card.data.device_status?.online!==m.data.online) event(id,m.data.online?'本体オンライン':'本体オフライン');
     if(['mind','behavior','emotion','device_status','memory'].includes(m.type))card.data[m.type]=m.data;
@@ -79,7 +104,7 @@ function attach(id, ownGeneration) {
     }
     if(m.type==='dialogue')dialogue(m.data);
     if(m.type==='dialogue_history')for(const message of m.data.messages)dialogue(message);
-    if(m.type==='error')event(id,'エラー: '+m.data.code);
+    if(m.type==='error'){event(id,'エラー: '+m.data.code+(m.data.message?' · '+m.data.message:''));if(m.data.code==='debug_rate_limited'&&selectedDebug?.id===id){clearTimeout(debugTimer);$('api-detail-status').textContent='選択が速すぎます。少し待って、もう一度選択してください。';}}
     if(['api_activity','telemetry_snapshot'].includes(m.type))renderAPI();
     render(id);
   };

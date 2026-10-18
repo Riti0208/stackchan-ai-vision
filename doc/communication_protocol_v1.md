@@ -601,7 +601,7 @@ DecisionsとResponsesを送信前の予約で合算し、失敗とタイムア�
 部屋トークンを既存の`POST /api/control/session`に渡し、HttpOnly Cookieで認証する。
 `GET /ws/monitor?room=<room>&device_id=<id>`は許可Originとその部屋のセッションを必須とする。
 `session.data.role`は`viewer`で、制御スロットを占有しない。既存のJSONイベントを購読し、
-JPEGは受信しない。送信可能なメッセージは`heartbeat`と`telemetry_request`だけ。
+JPEGは受信しない。通常の統計参照は`telemetry_request`、本文詳細参照は後述の`api_debug_request`を使用する。
 `detection`やバイナリ等の書き込みは拒否する。セッション期限切れは4003で切断する。
 再接続してもFWや解析の開始は行わない。モニター専用の内部ヘッダーを外部から指定してもBEが上書きする。
 `telemetry_snapshot`は既存の直近API120件・パイプライン60件の履歴を返し、累計とは区別する。
@@ -649,3 +649,22 @@ BE公開とv2 FW書き込みは協調する。**BE公開後〜v2 FW書き込み�
 公開後はdevice session v2、raw受信、viewer JPEG、Decisions用JPEG data URLを順に確認する。実API開始は既存の明示開始・期限・回数上限・停止ガードを継続する。
 rawは38416 bytes/枚で、60fpsなら約18.44Mbps/台（WS/TLS/TCP別）。60fpsは設定目標で、実機のfpsや改善を保証しない。
 再現手順・結果・測定の限界は[raw v2検証記録](raw_camera_transport_v2_validation.md)を参照。
+
+
+### 認証済みモニターのAPI本文詳細
+
+`api_activity` / `telemetry_snapshot` は引き続き本文なしの統計だけを返す。完了行の「JSONを見る」から、同じ部屋・個体の認証済み `/ws/monitor` へ次の読み取り要求を送信する。通常viewer・controller・deviceは本文を取得できない。monitor Cookieの期限とOrigin検証は既存契約と同じ。
+
+```json
+{"type":"api_debug_request","timestamp":1792270800000,"data":{"run_id":"run-uuid","stage":"perception"}}
+```
+
+`run_id` は英数字・underscore・hyphenの1〜80文字、`stage` は `perception` / `intention` / `narration`。接続先個体のrunとstageを照合するため、別個体のrunを指定しても本文を返さない。接続ごと250ms以内の連打は `debug_rate_limited`。認証・購読・本文参照はAPIの開始・予約・再送・延長をしない。
+
+応答 `api_debug.data` は `device_id` / `run_id` / `stage` / `detail`。`detail=null` は期限・容量超過、再起動、記録対象外などで本文が取得できないことを示す。
+
+`detail` は `method` / `url` / `request` / `response` / `error` を持つ。request/responseは `{body, bytes, truncated, images_omitted}`。modelを確定した実送信JSON、質問・文脈、回答・生成text、HTTPエラーのcode/type/messageを保存する。JSON以外や不正JSONは文字列で表示し、`response=null` は応答本文未取得。HTTP status/request ID/RTTは選択元の既存APISampleと併せて表示する。`error` は `{name,message,phase,guard_reason}`（成功時null）。送信前ガード拒否やランタイム例外も記録し、`AbortError` と期限の `TimeoutError` を区別して表示できる。
+
+画像data URLは `{omitted:"image",mime_type:"image/jpeg",bytes:1136}` 等へ置換し、画像本体は保持・転送しない。Authorization/Cookie等のヘッダーは収集せず、本文に反射された既知のAPIキーや機密フィールド値も伏せる。診断用の置換・省略があるため、画面のJSONはwire bytesそのものではなく実内容のサニタイズ済み表示。bytesは省略前UTF-8本文サイズ、エラー本文が上限で打ち切られた場合は取得済みサイズの下限。
+
+本文は各24KiB、文字列・深さ・項目数にも上限を設け、超過箇所を明示する。Room内の専用メモリーキャッシュで直近20件・合計1MiB・取得可能期間10分に制限し、Durable Object storageやCloudflare console/logには保存しない。再起動・デプロイで本文は失われる。ブラウザは選択した1件だけを本文DOMへ展開し、詳細を閉じる／切断で本文を消す。既存の120件統計履歴と本文の保持件数は異なる。

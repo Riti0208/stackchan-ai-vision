@@ -1,3 +1,4 @@
+import { APIDebugCache, type APIDebug } from './api-debug.ts';
 import { parseRawFrame, encodeRawFrame, LatestFrames, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
 import { FrameWindow } from './frame-window';
 import { monitorHTML, monitorJS } from './monitor';
@@ -17,7 +18,7 @@ interface Env extends ControlledPaidEnv {
 }
 type Config = Record<string, { control_token: string; devices: Record<string, string>; profiles?: Record<string, Personality> }>;
 type Action = ServerData['action']['action'];
-type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; frames: FrameWindow; lastMetricsRequest?: number; monitor?: boolean };
+type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; frames: FrameWindow; lastMetricsRequest?: number; lastDebugRequest?: number; monitor?: boolean };
 type Device = {
   id: string; room: string; mind: Mind; behavior?: Behavior; inbox: Dialogue[]; experienced: Set<string>; greeted: Set<string>; publicHistory: Dialogue[];
   peer?: Peer; stream: string | null; viewers: Set<Peer>; controller?: Peer;
@@ -150,6 +151,7 @@ export class Room {
   private metricHistory = new Map<string, History>();
   private ready: Promise<void>;
   private lastRuntimeMode = 'not_evaluated';
+  private apiDebug = new APIDebugCache();
   private activeAPICalls = new Map<string, ServerData['api_activity']>();
   private pendingAI = new Set<AbortController>();
   private rawFrames = new LatestFrames<{ d: Device; p: Peer; stream: string; raw: RawFrame; at: number; order: number }>();
@@ -310,8 +312,13 @@ export class Room {
     const parsed = parseClientMessage(raw, p.role);
     if (!parsed.ok) { if (parsed.code === 'unknown_type') return; return this.reject(p, parsed.code, parsed.fatal); }
     const m = parsed.message;
-    if (p.monitor && !['heartbeat', 'telemetry_request'].includes(m.type)) return this.reject(p, 'forbidden', true);
-    if (m.type === 'telemetry_request') {
+    if (p.monitor && !['heartbeat', 'telemetry_request', 'api_debug_request'].includes(m.type)) return this.reject(p, 'forbidden', true);
+    if (m.type === 'api_debug_request') {
+      if (!p.monitor) return this.reject(p, 'forbidden', true);
+      if (Date.now() - (p.lastDebugRequest || 0) < 250) return this.reject(p, 'debug_rate_limited');
+      p.lastDebugRequest = Date.now();
+      send(p, 'api_debug', { device_id: d.id, ...m.data, detail: this.apiDebug.get(`${d.id}:${m.data.run_id}:${m.data.stage}`) });
+    } else if (m.type === 'telemetry_request') {
       if (Date.now() - (p.lastMetricsRequest || 0) < 1000) { send(p, 'error', { code: 'telemetry_rate_limited', message: 'Wait one second before requesting metrics again' }); return; }
       p.lastMetricsRequest = Date.now(); send(p, 'telemetry_snapshot', this.telemetry(d, true));
     } else if (m.type === 'frame_ack') {
@@ -497,7 +504,7 @@ export class Room {
       } else {
         d.lastTextAt = Date.now();
         try {
-          const generated = await this.traceCall(d, run, 'narration', 'responses', observer => callNarration(this.env.OPENAI_API_KEY || '', narrationPayload(context(), choice), isSpeech, aiFetch, 3000, observer));
+          const generated = await this.traceCall(d, run, 'narration', 'responses', (observer, debug) => callNarration(this.env.OPENAI_API_KEY || '', narrationPayload(context(), choice), isSpeech, aiFetch, 3000, observer, debug));
           text = generated.text; calls.push(generated.metrics);
           generation = { provider: 'openai', model: DECISIONS_MODEL, reason: null };
         } catch (error) {
@@ -569,7 +576,7 @@ export class Room {
   private cancelConversations(id: string) {
     for (const d of this.devices.values()) d.inbox = d.inbox.filter(m => m.from_device_id !== id && m.to_device_id !== id);
   }
-  private async traceCall<T>(d: Device, run: Pipeline, stage: Stage, endpoint: CallMetrics['endpoint'], operation: (observer: (sample: APITiming) => void) => Promise<T>): Promise<T> {
+  private async traceCall<T>(d: Device, run: Pipeline, stage: Stage, endpoint: CallMetrics['endpoint'], operation: (observer: (sample: APITiming) => void, debug: (detail: APIDebug) => void) => Promise<T>): Promise<T> {
     const base = { call_id: crypto.randomUUID(), run_id: run.id, stream_id: run.stream_id, device_id: d.id, stage, endpoint, model: DECISIONS_MODEL };
     const started: ServerData['api_activity'] = { ...base, state: 'started', started_at: Date.now() };
     this.activeAPICalls.set(base.call_id, started);
@@ -578,11 +585,11 @@ export class Room {
       return await operation(sample => {
         const entry = { ...sample, stage, run_id: run.id, stream_id: run.stream_id }; run.api.push(entry);
         for (const peer of d.viewers) if (peer.monitor) send(peer, 'api_activity', { ...base, state: 'completed', sample: entry });
-      });
+      }, detail => this.apiDebug.put(`${d.id}:${run.id}:${stage}`, detail));
     } finally { this.activeAPICalls.delete(base.call_id); }
   }
   private async ask(d: Device, run: Pipeline, stage: Stage, payload: object, calls: CallMetrics[], aiFetch: typeof fetch): Promise<any> {
-    const { body, metrics } = await this.traceCall(d, run, stage, 'decisions', observer => callDecisions(this.env.OPENAI_API_KEY || '', payload, aiFetch, 4000, observer));
+    const { body, metrics } = await this.traceCall(d, run, stage, 'decisions', (observer, debug) => callDecisions(this.env.OPENAI_API_KEY || '', payload, aiFetch, 4000, observer, debug));
     calls.push(metrics);
     return body;
   }
