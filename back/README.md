@@ -418,7 +418,7 @@ CLI方式の`PAID_SESSION_ID`等はモニター制御が無効な環境で引き
 原要求は[raw camera spec](../doc/raw_camera_transport_v2.md)、実装境界・メトリクス・負荷計測は[検証記録](../doc/raw_camera_transport_v2_validation.md)を参照。
 `npm run test:unit`、`npm run test:e2e`は外部OpenAIを呼ばない。`node scripts/benchmark-raw.mjs`はローカルworkerdで単色・勾配・ノイズ各1000枚のencoder時間・Inspector観測ヒープ・検証用bundleサイズをJSON出力する。
 encoderはjpeg-js 0.4.4のBSDライセンスを保持した純JS adapter。`node scripts/vendor-jpeg-encoder.mjs`で固定依存ソースから再生成する。NodeのBuffer/DOM/ネイティブJPEG encoderをWorkerでは使わない。
-RGBA 76800 bytesとencoderの表をisolateで再利用する。rawを受信イベント内で1枚ずつ同期変換・配信し、変換待ちの独自キューは持たない。遅いviewerのACK窓は別に維持する。
+RGBA 76800 bytesとencoderの表をisolateで再利用する。roomごとに変換中1枚＋デバイスごとに最新raw 1枚だけを保持し、raw変換の破棄とviewer ACK窓による切断を別々に扱う。
 
 BEデプロイとv2 FW書き込みを協調する。**BE公開後〜FW更新完了までは旧FWはofflineとなる**。旧JPEG fallbackはない。rawは38.4KB/枚で、60fpsには約18.44Mbps/台（通信オーバーヘッド別）が必要。実機のfps/転送時間/変換時間/破棄数/CPUを比較してから性能改善を案内する。
 
@@ -459,9 +459,9 @@ FWは従来のまま使う。BE内部のpanは左が負・右が正を維持し�
 
 ### 完成済みJPEGの配信継続
 
-FE向けの配信fps上限は設けない。正常な新規rawは受信順に同期変換・配信し、変換前後で新着を理由に間引かない。旧接続・重複/逆順IDの除外と遅いviewerのACK窓は維持する。AI用の鮮度制限・OpenAI評価周期はFE配信と独立している。
+FE向けの配信fps上限は設けない。変換完了後に新しいrawフレームを受信していても、完成したJPEGが同じ接続・streamに属し、受信から3000ms以内で配信順序が新しければ配信する。変換待ちは従来どおり個体ごとの最新raw1枚だけとし、次の変換で消費する。旧接続/stream・期限切れ・配信済みより古い結果の除外と、遅いviewerのACK窓は維持する。OpenAIの評価周期は独立しており、FE配信に追従してAPIを呼び出すことはない。
 
-`test/conversion-progress.test.mjs`は配信後の診断yieldだけをテスト内のI/Oバリアへ置換する。計測が停止しても配信が進むこと、burst全件配信、接続交換後に旧計測が混ざらないこと、frame IDの周回、STREAM_FPSによるFE間引きがないことを検証する。productionにテスト用設定や外部リクエストは追加しない。
+`test/conversion-progress.test.mjs`は変換完了後のyieldだけをテスト内のI/Oバリアへ置換し、新着受信を確実に挟む。完成済みの配信、burst時の待機raw置換、接続交換、期限切れ、frame IDの周回、STREAM_FPSによるFE間引きがないことを検証する。productionにテスト用設定や外部リクエストは追加しない。
 
 ### 人物追従の補正量（2026-10-18更新）
 
@@ -484,9 +484,3 @@ API予約時に回数上限・期限切れ・停止が判明した場合は`outc
 ### デバッグの回数無制限（2026-10-18更新）
 
 `max_calls:0`は回数無制限。モニターは時間・回数とも0を既定とし、開始は引き続き明示操作のみ。正の安全な整数なら指定回数で停止し、1000回という上限は設けない。時間制限、手動停止、デプロイ世代変更は維持する。`used_calls`は無制限でも共通予算actorで数え続け、画面には「使用回数 / 無制限」と表示する。既存セッションの上限を勝手に変更・再開始しない。CLIは従来の60秒/30回を既定に保ち、`--max-calls 0`を明示した場合だけ回数無制限になる。
-
-### FE配信の間引き撤廃（2026-10-18更新）
-
-BEは現在接続のFWから受信した正常な新規SCFW rawフレームを、受信イベント内で1枚ずつ同期的にJPEGへ変換し、ACKを返せる各FEへ受信順に配信する。最新1枚への変換待ち置換とFE向けfps制限は設けない。受信イベントを越えるrawの独自キューは持たない。3秒の鮮度条件はAI・検出との照合用で、FE向けJPEG配信を間引く条件にはしない。
-
-診断用のtimer yieldは配信後だけに置き、旧接続の計測完了は旧transport統計だけを更新する。計測はencode・配信・yieldを含むwall時間で、CPU時間ではない。無効形式・重複/逆順ID・旧接続は従来どおり受け付けない。遅いFEのACK窓（120枚・8MiB・2秒）によるFE接続の切断は別のバックログ保護として維持する。FW接続をACK待ちで切断しない。OpenAIの評価頻度・明示開始/停止はFE配信から独立する。

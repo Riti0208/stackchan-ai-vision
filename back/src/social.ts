@@ -22,12 +22,14 @@ export function expressionForEmotion(e: Emotion, personality: Personality): Expr
   return 'thinking';
 }
 // Older firmware rejects an entire motion command when its face is unknown.
-export function compatibleExpression(face: Expression, version=1): Expression {
-  if(version>=2 || ['neutral','happy','sad','surprised','thinking','sleepy','love','wink'].includes(face)) return face;
-  if(['excited','proud','laughing'].includes(face)) return 'happy';
+export function compatibleExpression(face: Expression, version=0): Expression {
+  if(version>=2) return face;
+  const legacy = ['neutral','happy','sad','surprised','thinking'];
+  if(legacy.includes(face) || (version===1 && ['sleepy','love','wink'].includes(face))) return face;
+  if(['excited','proud','laughing','love','wink'].includes(face)) return 'happy';
   if(face==='angry' || face==='crying') return 'sad';
   if(face==='curious' || face==='confused') return 'thinking';
-  if(face==='tired') return 'sleepy';
+  if(face==='tired' && version===1) return 'sleepy';
   return 'neutral';
 }
 export function planFor(choice: string, personality: Personality): Plan {

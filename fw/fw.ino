@@ -311,12 +311,14 @@ void loop() {
       while (stackchan_fw::receiveAction(command)) {
         if (command.generation == stackchan_fw::wssConnectionCount() &&
             stackchan_fw::wssSessionReady()) {
+          now = millis(); // Sample after dequeue; receivedAt belongs to the network task.
           if (!behavior.accept(command, now)) Serial.println("ACTION expired before application");
         }
       }
     } else {
       behavior.idle(now);
     }
+    now = millis();
     behavior.update(now);
     stackchan_fw::reportAction(behavior.action());
   }

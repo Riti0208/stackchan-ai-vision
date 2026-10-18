@@ -2,7 +2,7 @@ import { toDeviceMotion } from './device-motion.ts';
 import { deploymentStatus } from './deployment.ts';
 import { behaviorMode, manualTarget, coarseTarget, followFresh, FOLLOW_MAX_AGE_MS, type FollowGate } from './follow-person.ts';
 import { APIDebugCache, type APIDebug } from './api-debug.ts';
-import { parseRawFrame, encodeRawFrame, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
+import { parseRawFrame, encodeRawFrame, LatestFrames, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
 import { FrameWindow } from './frame-window';
 import { monitorHTML, monitorJS } from './monitor';
 import { logCloseRequested, logConnection, logRun, logTransport } from './observability';
@@ -188,6 +188,8 @@ export class Room {
   private apiDebug = new APIDebugCache();
   private activeAPICalls = new Map<string, ServerData['api_activity']>();
   private pendingAI = new Set<AbortController>();
+  private rawFrames = new LatestFrames<{ d: Device; p: Peer; stream: string; raw: RawFrame; at: number; order: number }>();
+  private conversionScheduled = false;
   private bigEndianDevices: Set<string>;
   constructor(private ctx: DurableObjectState, private env: Env, private aiFetch: typeof fetch = (input, init) => fetch(input, init)) {
     this.aiFetch = aiFetch;
@@ -312,7 +314,7 @@ export class Room {
       d.lastTextAt = 0; d.textRetryAt = 0; d.textEmotion = undefined; d.lastChoice = undefined; d.human = initialHumanActions(d.human);
       await this.persist(d);
       d.peer = p; d.stream = crypto.randomUUID(); d.transport = newTransport(d.stream, this.bigEndianDevices.has(id) ? 'big' : 'little'); d.actionSentAt.clear(); d.latest = undefined; d.frames.clear();
-      d.seq = 0; d.pan = 0; d.tilt = 0; d.inputId = undefined; d.order = 0; d.detectedOrder = -1; d.lastDecision = -1; d.gestureUntil = 0; d.lastDetection = 0;
+      d.seq = 0; d.pan = 0; d.tilt = 0; this.rawFrames.cancel(d.id); d.inputId = undefined; d.order = 0; d.detectedOrder = -1; d.lastDecision = -1; d.gestureUntil = 0; d.lastDetection = 0;
       d.status = { online: true, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' };
       logConnection(d, true);
       for (const viewer of d.viewers) { viewer.frames.clear(); }
@@ -333,6 +335,7 @@ export class Room {
   private cleanup(p: Peer, d: Device, close?: { code: number; reason: string }) {
     if (p.role === 'device' && d.peer === p) {
       d.evaluation?.abort(); d.follow = undefined;
+      if (this.rawFrames.cancel(d.id)) d.transport.conversion_dropped++;
       logConnection(d, false, close);
       this.cancelConversations(d.id);
       d.mind = { ...d.mind, revision: d.mind.revision + 1, intent: 'rest', target: { kind: 'none', device_id: null }, valid_until: 0 }; d.behavior = undefined;
@@ -357,7 +360,8 @@ export class Room {
       const at = Date.now(), order = ++d.order;
       receiveFrame(d.transport, raw.byteLength, at);
       send(p, 'frame_received', { stream_id: d.stream!, frame_id: id });
-      this.convertAndPublish(d, p, input, at, order);
+      if (this.rawFrames.put(d.id, { d, p, stream: d.stream!, raw: input, at, order })) d.transport.conversion_dropped++;
+      this.scheduleConversion();
       return;
     }
     if (new TextEncoder().encode(raw).length > 16384) { close(p, 1009, 'message_too_large'); return; }
@@ -406,33 +410,38 @@ export class Room {
       this.action(d, 'look_at', 'thinking', 500, '興味を示しながら、相手へ視線を向ける');
     }
   }
-  private convertAndPublish(d: Device, p: Peer, raw: RawFrame, at: number, order: number) {
-    // Complete one validated receive event synchronously. No latest-only queue,
-    // FPS throttle or async publication can drop/reorder accepted camera frames.
-    const transport = d.transport, started = performance.now();
-    try {
-      const packet = encodeRawFrame(raw, transport.input_byte_order);
-      transport.converted_total++;
-      d.latest = { bytes: packet.subarray(4), id: raw.id, order, at };
-      d.frames.set(raw.id, { order, at });
-      for (const [key, value] of d.frames) { if (at - value.at <= RAW_MAX_AGE_MS && d.frames.size <= MAX_FRAME_METADATA) break; d.frames.delete(key); }
-      transport.published_total++;
-      const sentAt = performance.now();
-      for (const viewer of d.viewers) {
-        if (viewer.monitor) continue;
-        if (!viewer.frames.canSend(packet.byteLength, sentAt)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
-        try { viewer.ws.send(packet); viewer.frames.sent(raw.id, packet.byteLength, sentAt); } catch { this.cleanup(viewer, d); }
-      }
-    } catch {
-      transport.conversion_errors++;
-      if (d.peer === p) this.reject(p, 'conversion_failed');
-    }
-    // Workers clocks advance on I/O. Measure wall time after publication;
-    // this diagnostic yield must never delay/drop the image or retain raw bytes.
-    this.ctx.waitUntil((async () => {
-      await new Promise<void>(resolve => setTimeout(resolve, 0));
-      addSample(transport.conversion_ms, performance.now() - started);
-    })());
+  private scheduleConversion() {
+    if (this.conversionScheduled || !this.rawFrames.size) return;
+    this.conversionScheduled = true;
+    // Yield between encodes so incoming frames can replace a pending frame.
+    setTimeout(async () => {
+      const item = this.rawFrames.take();
+      try {
+        if (!item) return;
+        const { d, p, stream, raw, at, order } = item;
+        if (d.peer !== p || d.stream !== stream || Date.now() - at > RAW_MAX_AGE_MS) { d.transport.conversion_dropped++; return; }
+        const transport = d.transport, started = performance.now(), packet = encodeRawFrame(raw, d.transport.input_byte_order);
+        // Production Workers clocks advance on I/O only. Include a timer yield so
+        // the bounded sample measures encode + scheduler wall time, never fake CPU=0.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        const completed = performance.now();
+        addSample(transport.conversion_ms, completed - started); transport.converted_total++;
+        // New ingress must not starve completed JPEGs. Publish in ingress order
+        // while fresh; the next conversion consumes the newest pending raw frame.
+        if (d.peer !== p || d.stream !== stream || order <= (d.latest?.order ?? -1) || Date.now() - at > RAW_MAX_AGE_MS) { transport.conversion_dropped++; return; }
+        transport.published_total++;
+        d.latest = { bytes: packet.subarray(4), id: raw.id, order, at };
+        d.frames.set(raw.id, { order, at });
+        for (const [key, value] of d.frames) { if (at - value.at <= RAW_MAX_AGE_MS && d.frames.size <= MAX_FRAME_METADATA) break; d.frames.delete(key); }
+        for (const viewer of d.viewers) {
+          if (viewer.monitor) continue;
+          if (!viewer.frames.canSend(packet.byteLength, completed)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
+          try { viewer.ws.send(packet); viewer.frames.sent(raw.id, packet.byteLength, completed); } catch { this.cleanup(viewer, d); }
+        }
+      } catch {
+        if (item) { item.d.transport.conversion_errors++; if (item.d.peer === item.p) this.reject(item.p, 'conversion_failed'); }
+      } finally { this.conversionScheduled = false; this.scheduleConversion(); }
+    }, 0);
   }
   private action(d: Device, action: Action, expression: Motion['expression'], duration_ms: number, display_text = '穏やかな表情で待つ', run?: Pipeline, following = false, manual = false) {
     if (!d.peer || (!manual && Date.now() < (d.manualUntil || 0)) || (!manual && behaviorMode(this.env) === 'follow_person' && !following)) return;
@@ -453,6 +462,11 @@ export class Room {
       if (d.peer && now - (d.lastHeadAt || 0) >= 1000) {
         if (now < (d.manualUntil || 0)) this.action(d, 'look_at', d.behavior?.command.expression || 'neutral', 500, '手動操作', undefined, false, true);
         else if (behaviorMode(this.env) === 'follow_person' && d.headSource === 'follow' && followFresh(d.follow, d.stream, now)) this.action(d, 'look_at', d.behavior?.command.expression || 'thinking', 250, '人物に追従（位置保持）', undefined, true);
+        else if (behaviorMode(this.env) === 'autonomous' && d.headSource === 'autonomous' &&
+          d.mind.valid_until > now && now >= d.gestureUntil && d.behavior?.command.action === 'look_at') {
+          // Refresh only a still-valid gaze, never repeat a gesture or extend an expired intention.
+          this.action(d, 'look_at', d.behavior.command.expression, 500, d.behavior.display_text);
+        }
       }
       if (now - d.lastTelemetry >= 5000) { const data = this.telemetry(d); this.broadcast(d, 'telemetry', data);  d.lastTelemetry = now; }
       if (d.peer && now - (d.lastTransportLog || 0) >= 5000) { logTransport(d, this.telemetry(d)); d.lastTransportLog = now; }
@@ -602,6 +616,7 @@ export class Room {
           text = generated.text; calls.push(generated.metrics);
           generation = { provider: 'openai', model: DECISIONS_MODEL, reason: null };
         } catch (error) {
+          if (error instanceof PaidSessionStopped) throw error;
           if (!valid()) { run.reason = 'stale_frame_or_stream'; return; }
           d.textRetryAt = Date.now() + (error instanceof OpenAIError ? error.retryAfterMs : 10000);
           generation = { provider: 'fallback', model: null, reason: error instanceof OpenAIError && error.status === 429 ? 'rate_limit' : 'api_error' };

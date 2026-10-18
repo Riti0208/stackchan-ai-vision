@@ -119,7 +119,6 @@ export class RobotConnection {
         d.type !== "result" ||
         d.generation !== this.generation ||
         d.stream !== this.state.stream ||
-        d.key !== this.displayed ||
         !this.state.online
       )
         return;
@@ -130,10 +129,12 @@ export class RobotConnection {
         primary_face_id: d.primary,
       };
       if (!isDetection(detection)) return;
-      this.patch({
-        faces: detection.faces,
-        primary: detection.primary_face_id,
-      });
+      // Control results remain useful for recent frames; overlays must match the canvas.
+      if (d.key === this.displayed)
+        this.patch({
+          faces: detection.faces,
+          primary: detection.primary_face_id,
+        });
       if (this.state.role === "controller")
         this.send({
           type: "detection",
@@ -480,7 +481,6 @@ export class RobotConnection {
         if (
           this.stopped ||
           item.generation !== this.generation ||
-          this.pending ||
           !this.canvas
         ) {
           bitmap.close();

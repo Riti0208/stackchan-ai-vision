@@ -199,14 +199,14 @@ offset 0..3: frame_id (uint32, big-endian)
 offset 4.. : backend-produced JPEG bytes (160x120)
 ```
 
-BEは受信イベント内で正常な新規rawを1枚ずつ同期変換し、受信順にJPEGを配信する。変換待ちrawの置換キューとFE向けfps制限は持たない。
+roomごとに変換中1枚、待機は認可済みデバイスごとの最新1枚だけ。待機中の旧画像を置き換え、3000ms超過・旧接続/stream・変換後により新しい入力がある結果は破棄する。
 `frame_received`はrawの検証・順序受け付け直後の確認で、変換完了やviewer配送を保証しない。
 FWはフレームごとにIDを1増やす（uint32循環）。再接続時は0に戻してよい。
 BEはデバイスごとに最新画像だけを推論用メモリーに保持し、画像を永続保存しない。
-BEはrawを独自キューへ積まず受信順に変換する。FWの撮影側・FEの描画側の最新優先処理とは区別する。
+FW・BE・FEはアプリ内の未処理画像を積み上げず最新を優先する。
 既に送信したWSメッセージは取り消せないため、配送済み古フレームの到着はあり得る。
 FEは画像を受信・消費（描画待ちの旧画像を破棄する場合も含む）するごとに、同じstream/frame_idで受信確認を返す。
-BEは正常に変換した全JPEGを接続中の通常FEへ中継し、OpenAIの評価間隔では間引かない。rawを変換前に最新1枚へ間引くこともない。未ACKは接続ごとに最大120枚・合計8MiB（4バイトヘッダー込み）、最古の未ACKから2000msまで。次の送信で枚数・バイト数の上限を超える場合、または期限到達時に1013 / slow_viewerで閉じる。他の閲覧者は待たせない。
+BEは変換・鮮度検査を通過した全JPEGを接続中の通常FEへ中継し、OpenAIの評価間隔では間引かない。rawの最新優先による破棄は別途記録する。未ACKは接続ごとに最大120枚・合計8MiB（4バイトヘッダー込み）、最古の未ACKから2000msまで。次の送信で枚数・バイト数の上限を超える場合、または期限到達時に1013 / slow_viewerで閉じる。他の閲覧者は待たせない。
 期限は送信前と500ms周期で検査するため、送信が止まってもおおむね2500ms以内に閉じる。ACK待ちで画像の独自キューや再送は作らず、管理情報だけを保持する。
 確認は画像配送のフロー制御用であり、顔検出の完了確認ではない。検出は別途非同期に送る。
 
@@ -280,7 +280,7 @@ BEはジェスチャー中に次の追跡・ジェスチャー指令を送らな
 追跡中に検出が3秒途絶した場合は追跡を止めidleへ移る。
 FWは通信断でジェスチャーを止め、安全な待機状態へ移る。可動範囲・速度制限はFWの責任。
 
-FWは18表情対応を`device_status.data.face_version: 2`で通知する（省略時は旧8表情）。BEは通知前には新表情を旧表情に変換し、旧FWが首の指令まで拒否することを防ぐ。
+FWは18表情対応を`device_status.data.face_version: 2`で通知する。明示的な1は旧8表情、省略時は初期5表情（neutral/happy/sad/surprised/thinking）だけに変換する。通知前も最も古いFWが首の指令まで拒否しない値を使う。
 FWは接続直後と以後5秒ごとにdevice_statusを送る。未取得値はnull、未計測FPSは0。
 BEは接続直後の暫定値として`online: true, fps: 0, wifi_rssi: null, battery: null, current_action: idle`を配信可。
 FWからの無通信だけを理由にBEは接続を閉じない。device_statusや画像が15秒以上途絶しても同じstreamで再開できる。onlineはソケット接続状態を示し、稼働確認や映像鮮度の保証ではない。実際のclose/error、同じdevice_idの新接続による置換では従来どおりcleanupする。controllerの15秒heartbeat期限は別に維持する。
@@ -643,8 +643,8 @@ key_configured、実行バージョン）も返す。公開設定と部屋側の
 
 `telemetry.transport.input_format = rgb565le-v2`。`frames_received` / `bytes_received` / `received_fps`は認証・形式・順序検証を通ったraw入力を数える。
 `conversion`に`count/p50_ms/p95_ms/max_ms`（最新120件）、`converted_total`、`published_total`、`dropped_total`、`errors`を追加する。
-convertedはencode完了数、publishedは内部JPEGへ公開した数。droppedは互換性のため残すが、現行の同期配信処理は最新優先・期限による破棄を行わず0となる。変換失敗はerrorsへ記録する。
-`timing = encode_and_yield_wall_ms`は**変換＋配信＋timer yieldの経過時間**であり、CPU課金時間ではない。公開Workersの時計はI/O時だけ進むため、純CPU処理の前後差分をCPU時間と扱わない。CPU特性はローカルworkerd、公開CPUはCloudflareのCPUプロファイルで確認する。
+convertedはencode完了数、publishedは鮮度検査を通り内部JPEGへ公開した数、droppedは待機置換・期限・旧世代・変換後のsupersededを含む。変換後破棄はconvertedとdroppedの両方に含まれる。
+`timing = encode_and_yield_wall_ms`は**変換＋timer yieldの経過時間**であり、CPU課金時間ではない。公開Workersの時計はI/O時だけ進むため、純CPU処理の前後差分をCPU時間と扱わない。CPU特性はローカルworkerd、公開CPUはCloudflareのCPUプロファイルで確認する。
 画像・raw bytes・Bearer token・API入力本文をメトリクスに含めない。
 
 BE公開とv2 FW書き込みは協調する。**BE公開後〜v2 FW書き込みまでは旧FWはofflineになる**。旧JPEGを自動fallbackで動かさない。
@@ -709,7 +709,7 @@ FWは従来のまま使う。BE内部のpanは左が負・右が正を維持し�
 
 ### 変換済みJPEGの配信条件
 
-FEへのfps上限は設定しない。正常な新規rawは受信イベント内で順次変換し、全JPEGを配信する。frame_idの周回を含む入力順序検証と旧接続の除外は維持する。変換前の最新1枚への置換は廃止した。遅いviewerのACK窓による保護と、OpenAI送信の評価周期は別に維持する。
+FEへのfps上限は設定しない。新しいrawを受信したという理由だけで、変換済みJPEGを破棄しない。同一device接続・同一stream・画像受信から3000ms以内・前回配信より新しい受信順序、を満たす結果を順次配信する。順序はuint32 frame_idの数値比較ではなくBEの受信orderを使い、IDの周回に対応する。変換待ちrawは個体ごとに最新1枚へ置換するため、すべての受信rawの変換を保証するものではない。旧接続の画像、期限切れ、遅いviewerのACK窓による保護は維持する。OpenAI送信頻度は別の評価周期で制御する。
 
 ### 人物追従の補正量（2026-10-18更新）
 
@@ -729,8 +729,15 @@ API予約時に回数上限・期限切れ・停止が判明した場合は`outc
 
 `max_calls:0`は回数無制限。モニターは時間・回数とも0を既定とし、開始は引き続き明示操作のみ。正の安全な整数なら指定回数で停止し、1000回という上限は設けない。時間制限、手動停止、デプロイ世代変更は維持する。`used_calls`は無制限でも共通予算actorで数え続け、画面には「使用回数 / 無制限」と表示する。既存セッションの上限を勝手に変更・再開始しない。CLIは従来の60秒/30回を既定に保ち、`--max-calls 0`を明示した場合だけ回数無制限になる。
 
-### FE配信の間引き撤廃（2026-10-18更新）
 
-BEは現在接続のFWから受信した正常な新規SCFW rawフレームを、受信イベント内で1枚ずつ同期的にJPEGへ変換し、ACKを返せる各FEへ受信順に配信する。最新1枚への変換待ち置換とFE向けfps制限は設けない。受信イベントを越えるrawの独自キューは持たない。3秒の鮮度条件はAI・検出との照合用で、FE向けJPEG配信を間引く条件にはしない。
+### 通信監査の動作欠落対策
 
-診断用のtimer yieldは配信後だけに置き、旧接続の計測完了は旧transport統計だけを更新する。計測はencode・配信・yieldを含むwall時間で、CPU時間ではない。無効形式・重複/逆順ID・旧接続は従来どおり受け付けない。遅いFEのACK窓（120枚・8MiB・2秒）によるFE接続の切断は別のバックログ保護として維持する。FW接続をACK待ちで切断しない。OpenAIの評価頻度・明示開始/停止はFE配信から独立する。
+FEは同じ接続世代の復号済み画像を、新しいpending画像があるだけでは捨てず描画してframe_ackを返す。未着手のpending画像は最新に置き換え、後続の累積ACKで解放する。画像ACKの120枚/8MiB/2秒制限は維持する。
+
+同stream/世代の顔検出結果は、表示画像が先へ進んでいてもcontrollerからBEへ送る。BEが受信済みframe・順序・3秒鮮度を検証する。顔枠は表示中のkeyと一致した結果だけ描画する。
+
+autonomousのlook_atも意向のvalid_until内だけ1秒ごとに同じ絶対目標を再送し、3秒無指令timeoutを持つ旧FWとの互換を保つ。現行FWは接続中の最終look_atを保持し、明示idleまたは通信断で中央へ戻る。期限切れ・切断・mode変更では更新せず、gestureを繰り返す用途には使わない。手動優先とpanの送信境界反転は維持する。
+
+FWはdequeue後に適用時刻を取得する。異なるtaskの時刻採取の前後が入れ替わった小さな負のageをunsignedの巨大な期限超過と扱わない。ACKは引き続きqueue受理を表し、物理動作完了は保証しない。
+
+narrationの予約時に予算停止となった場合も共通のPaidSessionStopped処理へ渡す。API障害の代替文として新たな意向を確定せず、pipelineはdiscarded/paid_session_*となる。既に許可されたperception由来の追従と、実API失敗時の通常fallbackは従来どおり扱う。
