@@ -589,7 +589,7 @@ DecisionsとResponsesを送信前の予約で合算し、失敗とタイムア�
 {"active":true,"reason":null,"expires_at":1792270800000,"max_calls":30,"used_calls":12}
 ```
 
-`expires_at`はUnixミリ秒、未設定ならnull。`reason`は実行可能時null、それ以外は
+`expires_at`はUnixミリ秒。未開始または時間無制限のセッションではnull（activeで区別する）。`reason`は実行可能時null、それ以外は
 `mock` / `not_started` / `expired` / `call_limit`。`used_calls`はセッション全体の予約数であり、
 映像や質問数、ドル建て費用ではない。参照は開始・延長・回数リセットをしない。
 上限後はBEで送信を拒否し、デモプロセスは自動終了する。時間切れは進行中の通信も中断する。
@@ -611,7 +611,7 @@ JPEGは受信しない。通常の統計参照は`telemetry_request`、本文詳
 `ENABLE_PAID_CONTROL=true`の環境で、`POST /api/control/paid-session?room=main`を追加する。
 `ALLOWED_ORIGIN`と有効な部屋Cookieを必須とし、`PAID_CONTROL_ROOM`（既定main）の認証だけを許可する。
 `Content-Type: application/json`、bodyは最大1024 bytes。
-- 開始: `{"action":"start","seconds":300,"max_calls":100}`。secondsは整数1〜600、max_callsは整数1〜1000。
+- 開始: `{"action":"start","seconds":300,"max_calls":100}`。secondsは整数0〜600（0は時間無制限）、max_callsは整数1〜1000。
 - 停止: `{"action":"stop"}`。
 
 応答はpaid_sessionと同じactive/reason/expires_at/max_calls/used_callsにsession_idを加える。
@@ -688,3 +688,8 @@ follow_personは同じperceptionのquestionsに`person_horizontal` choice（left
 manual_untilまで10秒は全自動のhead command・pan/tilt更新を抑止する。感情/本音/会話更新は継続可。FWの3秒watchdogに対して手動は1秒ごとに同targetのlook_atを再送し、そのたびseqを更新する。resumeは即解除のみで新規seqを発行しない。期限後/resume後は新鮮な追従gateに従い、古い観測だけでは再開しない。再接続で手動stateとseqをリセットする。HTTP応答は受付で、到達/受理は既存action_ackとtelemetryで別途確認する。
 
 実機固有の`RGB565_BIG_ENDIAN_DEVICES`補正適用はtelemetry.transportの`input_byte_order: little|big`と`byte_order_override: boolean`で示す。raw format 1の標準契約はLEのまま。productionの既知01以外は未適用。
+
+
+### デバッグ用実APIの時間制限（2026-10-18更新）
+
+モニターからの明示開始は時間無制限を既定にする。開始bodyの`seconds:0`は時間無制限で、active時の`expires_at:null`を意味する。1〜600は従来の秒数指定として使える。`max_calls`は従来どおり必須の整数1〜1000で、全ルーム・全デバイス共通の予約回数上限を維持する。時間無制限でも手動停止、回数上限、デプロイ世代変更で失効し、画面を開く/再接続するだけでは開始・延長・回数リセットしない。APIごとのタイムアウトと停止時の中断は維持する。CLIローカルデモの有期限設定は変更しない。

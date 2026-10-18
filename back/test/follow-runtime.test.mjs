@@ -66,7 +66,7 @@ test('stop and old streams invalidate early results; final authorized budget slo
  const h=await harness({mock:true,controlled:true});try{
   const d=await h.connect();await h.control({action:'start',seconds:30,max_calls:10});h.state.delay=800;d.frame(0);await until(()=>h.requests.length>0);await h.control({action:'stop'});await sleep(1100);assert.equal(d.actions().length,0);
   await h.control({action:'start',seconds:30,max_calls:10});const count=h.requests.length;d.frame(1);await until(()=>h.requests.length>count);const next=await h.connect();await sleep(1000);assert.equal(next.actions().length,0);
-  await h.control({action:'stop'});await h.control({action:'start',seconds:30,max_calls:1});h.state.delay=50;const before=h.requests.length;next.frame(0);assert.equal((await next.wait(m=>m.type==='action')).data.pan,.08);assert.equal(h.requests.length,before+1);assert.equal((await h.health()).paid_session.reason,'call_limit');
+  await h.control({action:'stop'});await h.control({action:'start',seconds:0,max_calls:1});h.state.delay=50;const before=h.requests.length;next.frame(0);assert.equal((await next.wait(m=>m.type==='action')).data.pan,.08);assert.equal(h.requests.length,before+1);assert.equal((await h.health()).paid_session.reason,'call_limit');
  }finally{await h.close();}
 });
 

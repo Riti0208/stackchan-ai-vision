@@ -88,8 +88,8 @@ test('authenticated control toggles live calls, never starts on page load, stops
     const cookie=await f.loginControl();const observation=await f.monitor();
     assert.equal((await f.control({action:'start',seconds:300,max_calls:100},cookie,'https://evil.example')).status,403);
     assert.equal((await f.control({action:'start',seconds:601,max_calls:100},cookie)).status,400);
-    const start=await f.control({action:'start',seconds:300,max_calls:100},cookie);assert.equal(start.status,200);
-    const first=await start.json();assert.equal(first.active,true);await f.connect('main');
+    const start=await f.control({action:'start',seconds:0,max_calls:100},cookie);assert.equal(start.status,200);
+    const first=await start.json();assert.equal(first.active,true);assert.equal(first.expires_at,null);await f.connect('main');
     assert.equal((await f.control({action:'start',seconds:300,max_calls:100},cookie)).status,409);
     for(let i=0;i<50 && !await f.count('main');i++)await sleep(100);
     assert.ok(await f.count('main')>0);

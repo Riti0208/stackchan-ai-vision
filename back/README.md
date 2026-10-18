@@ -440,3 +440,8 @@ FE controllerは必須ではない。follow_personではFE detectionによる首
 ## 実機01の暫定RGB565補正
 
 productionの`RGB565_BIG_ENDIAN_DEVICES=stackchan-01`は、LEと宣言しながら実bufferがMSB-firstの既知FW profileだけを補正する。SCFW format 1の標準LE契約やsimulator/02は変更しない。local/OpenAIデモは未指定、smokeは空文字にしてLEを維持する。telemetryのinput_byte_orderとbyte_order_overrideで適用を確認する。FW修正後はこの変数から01を削除して再デプロイする。詳細は[色互換補正の記録](../doc/raw_camera_color_compatibility.md)。
+
+
+### デバッグ用実APIの時間制限（2026-10-18更新）
+
+モニターからの明示開始は時間無制限を既定にする。開始bodyの`seconds:0`は時間無制限で、active時の`expires_at:null`を意味する。1〜600は従来の秒数指定として使える。`max_calls`は従来どおり必須の整数1〜1000で、全ルーム・全デバイス共通の予約回数上限を維持する。時間無制限でも手動停止、回数上限、デプロイ世代変更で失効し、画面を開く/再接続するだけでは開始・延長・回数リセットしない。APIごとのタイムアウトと停止時の中断は維持する。CLIローカルデモの有期限設定は変更しない。

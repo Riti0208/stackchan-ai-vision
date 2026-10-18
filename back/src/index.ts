@@ -477,7 +477,7 @@ export class Room {
     this.lastRuntimeMode = mode || 'unknown';
     const canFollow = following && (!controlled || mode === 'decisions');
     if (following && !canFollow) d.follow = undefined;
-    const runEnv = controlled ? { AI_MODE: mode, PAID_SESSION_ID: status?.session_id || '', PAID_SESSION_UNTIL: String(status?.expires_at || 0), PAID_SESSION_MAX_CALLS: String(status?.max_calls || 0) } : this.env;
+    const runEnv = controlled ? { AI_MODE: mode, PAID_SESSION_ID: status?.session_id || '', PAID_SESSION_UNTIL: String(status?.expires_at || 0), PAID_SESSION_UNLIMITED: status?.active && status.expires_at === null ? 'true' : 'false', PAID_SESSION_MAX_CALLS: String(status?.max_calls || 0) } : this.env;
     const aiFetch = guardedFetch(runEnv, async () => {
       const url = new URL('https://room.internal/paid-budget');
       if (controlled) url.searchParams.set('session_id', status?.session_id || '');
@@ -509,7 +509,7 @@ export class Room {
       }
       if (!valid() || Date.now() - frame.at > FOLLOW_MAX_AGE_MS) { d.follow = undefined; run.reason = 'stale_follow_frame'; return; }
       d.lastFollowOrder = frame.order;
-      d.follow = observations.person_present >= .5 ? { stream, order: frame.order, frameAt: frame.at, until: Math.min(frame.at + FOLLOW_MAX_AGE_MS, mode === 'decisions' ? status?.expires_at || paidSession(this.env).expires_at || 0 : Infinity) } : undefined;
+      d.follow = observations.person_present >= .5 ? { stream, order: frame.order, frameAt: frame.at, until: Math.min(frame.at + FOLLOW_MAX_AGE_MS, mode === 'decisions' ? (controlled ? status?.expires_at ?? Infinity : paidSession(this.env).expires_at ?? 0) : Infinity) } : undefined;
       const target = d.follow && evaluation.position ? coarseTarget(d.pan, d.tilt, evaluation.position) : null;
       if (!target && d.headSource === 'follow') d.headSource = undefined;
       if (target && Date.now() >= (d.manualUntil || 0) && followFresh(d.follow, d.stream, Date.now())) {

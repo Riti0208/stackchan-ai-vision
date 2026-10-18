@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { paidSession, reservePaidCall, guardedFetch } from '../src/paid-session.ts';
+import { paidSession, reservePaidCall, guardedFetch, updatePaidSession, controlledBudget } from '../src/paid-session.ts';
 import { demoLimits, prepareMockConfig, readLocalVars } from '../scripts/local-env.mjs';
 function configuration(extra = {}) { return { AI_MODE: 'decisions', PAID_SESSION_ID: 'session-1', PAID_SESSION_UNTIL: String(Date.now() + 60000), PAID_SESSION_MAX_CALLS: '3', ...extra }; }
 // Models the serialized storage transaction, including shared calls from multiple rooms.
@@ -89,6 +89,33 @@ test('manual session bounds, capability and API key are enforced before any gran
   const state=storage(), env={ENABLE_PAID_CONTROL:'true',OPENAI_API_KEY:'fake'};
   await assert.rejects(updatePaidSession(state,{}, {action:'start',seconds:300,max_calls:100}),/control_disabled/);
   await assert.rejects(updatePaidSession(state,{ENABLE_PAID_CONTROL:'true'}, {action:'start',seconds:300,max_calls:100}),/key_not_configured/);
-  for(const [seconds,max_calls] of [[0,100],[601,100],[300,0],[300,1001],[1.5,2]]) await assert.rejects(updatePaidSession(state,env,{action:'start',seconds,max_calls}),/invalid_limits/);
+  for(const [seconds,max_calls] of [[-1,100],[601,100],[300,0],[300,1001],[1.5,2]]) await assert.rejects(updatePaidSession(state,env,{action:'start',seconds,max_calls}),/invalid_limits/);
   assert.equal((await controlledBudget(state,env)).active,false);
+});
+
+
+test('explicit unlimited control survives elapsed time, refresh and restart but retains caps, stop and epoch guards',async()=>{
+ const state=storage(),env={ENABLE_PAID_CONTROL:'true',OPENAI_API_KEY:'fake',VERSION_METADATA:{id:'v1'}};
+ const initial=await updatePaidSession(state,env,{action:'start',seconds:0,max_calls:2});
+ assert.equal(initial.active,true);assert.equal(initial.expires_at,null);
+ const savedNow=Date.now;
+ try{Date.now=()=>savedNow()+24*60*60*1000;assert.equal((await controlledBudget(state,env)).active,true);}finally{Date.now=savedNow;}
+ assert.equal((await controlledBudget(state,{...env})).session_id,initial.session_id);
+ const runEnv=configuration({PAID_SESSION_ID:initial.session_id,PAID_SESSION_UNTIL:'0',PAID_SESSION_UNLIMITED:'true',PAID_SESSION_MAX_CALLS:'2'});
+ let calls=0;const guard=guardedFetch(runEnv,()=>controlledBudget(state,env,true,initial.session_id),async(_url,init)=>{calls++;assert.ok(!init.signal?.aborted);return new Response();});
+ await guard('https://example.test');await guard('https://example.test');
+ await assert.rejects(guard('https://example.test'),/call_limit/);assert.equal(calls,2);
+ const next=await updatePaidSession(state,env,{action:'start',seconds:0,max_calls:10});
+ assert.equal((await controlledBudget(state,{...env,VERSION_METADATA:{id:'v2'}})).reason,'deployment_changed');
+ await updatePaidSession(state,env,{action:'stop'});
+ await assert.rejects(guardedFetch({...runEnv,PAID_SESSION_ID:next.session_id},()=>controlledBudget(state,env,true,next.session_id),async()=>{throw Error('must not send');})('https://example.test'),/stopped/);
+});
+
+test('unlimited requests preserve caller cancellation and do not bypass missing session',async()=>{
+ const env=configuration({PAID_SESSION_UNTIL:'0',PAID_SESSION_UNLIMITED:'true'});
+ assert.equal(paidSession({...env,PAID_SESSION_ID:''}).active,false);
+ assert.equal(paidSession({...env,PAID_SESSION_UNLIMITED:'false'}).active,false);
+ const controller=new AbortController();controller.abort();
+ const guard=guardedFetch(env,async()=>({active:true,reason:null,expires_at:null}),async(_url,init)=>{assert.equal(init.signal,controller.signal);assert.equal(init.signal.aborted,true);return new Response();});
+ await guard('https://example.test',{signal:controller.signal});
 });

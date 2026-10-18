@@ -23,3 +23,33 @@ test('monitor script initializes without network or paid-session side effects', 
   });
   for (const event of ['login:submit', 'disconnect:click', 'paid-start:click', 'paid-stop:click']) assert.equal(typeof handlers.get(event), 'function');
 });
+
+test('paid duration defaults to unlimited and null expiry is displayed without remaining seconds', async () => {
+  assert.match(monitorHTML, /id="paid-seconds" type="number" min="0" max="600" value="0"/);
+  assert.match(monitorHTML, /0=時間無制限/);
+  const elements=new Map(), requests=[];
+  const get=id=>{if(!elements.has(id))elements.set(id,{addEventListener(){}});return elements.get(id);};
+  let health={ai_mode:'decisions',paid_control:{enabled:true,key_configured:true,room:'main'},paid_session:{active:true,expires_at:null,used_calls:2,max_calls:100}};
+  const ui=runInNewContext(monitorJS+`\n({show(h){running=true;currentRoom='main';lastHealth=h;showPaid()},command:paidCommand})`,{
+    document:{getElementById:get},window:{addEventListener(){}},setInterval(){},Date,AbortSignal,URLSearchParams,
+    fetch:async(url,init)=>{requests.push({url,...init});return {ok:true,json:async()=>url==='/health'?health:{ok:true}};},
+  });
+  ui.show(health);
+  assert.equal(requests.length,0);
+  assert.match(get('paid-result').textContent,/時間無制限 \/ 2 \/ 100 回/);
+  assert.doesNotMatch(get('paid-result').textContent,/残り|NaN/);
+  assert.equal(get('paid-start').disabled,true);assert.equal(get('paid-stop').disabled,false);
+  health={...health,paid_session:{...health.paid_session,expires_at:Date.now()+30000}};ui.show(health);
+  assert.match(get('paid-result').textContent,/残り 30 秒/);
+  get('paid-calls').value='100';get('paid-seconds').value='0';
+  await ui.command('start');
+  assert.deepEqual(JSON.parse(requests[0].body),{action:'start',seconds:0,max_calls:100});
+  assert.equal(requests[0].url,'/api/control/paid-session?room=main');
+  requests.length=0;
+  for(const seconds of ['-1','601','1.5']){get('paid-seconds').value=seconds;await ui.command('start');}
+  get('paid-seconds').value='0';for(const calls of ['0','1001','1.5']){get('paid-calls').value=calls;await ui.command('start');}
+  assert.equal(requests.length,0);assert.match(get('paid-result').textContent,/0〜600秒/);
+  get('paid-seconds').value='600';get('paid-calls').value='1000';await ui.command('start');
+  assert.deepEqual(JSON.parse(requests[0].body),{action:'start',seconds:600,max_calls:1000});
+  requests.length=0;await ui.command('stop');assert.deepEqual(JSON.parse(requests[0].body),{action:'stop'});
+});
