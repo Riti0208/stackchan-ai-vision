@@ -426,7 +426,9 @@ export class Room {
         await new Promise<void>(resolve => setTimeout(resolve, 0));
         const completed = performance.now();
         addSample(transport.conversion_ms, completed - started); transport.converted_total++;
-        if (d.peer !== p || d.stream !== stream || d.inputId !== raw.id || Date.now() - at > RAW_MAX_AGE_MS) { transport.conversion_dropped++; return; }
+        // New ingress must not starve completed JPEGs. Publish in ingress order
+        // while fresh; the next conversion consumes the newest pending raw frame.
+        if (d.peer !== p || d.stream !== stream || order <= (d.latest?.order ?? -1) || Date.now() - at > RAW_MAX_AGE_MS) { transport.conversion_dropped++; return; }
         transport.published_total++;
         d.latest = { bytes: packet.subarray(4), id: raw.id, order, at };
         d.frames.set(raw.id, { order, at });

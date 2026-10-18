@@ -703,3 +703,8 @@ manual_untilまで10秒は全自動のhead command・pan/tilt更新を抑止す�
 ### 首の左右補正（FW変更撤回）
 
 FWは従来のまま使う。BE内部のpanは左が負・右が正を維持し、共通送信処理で`pan`だけ符号反転してactionを作る。tilt、seq、action、expression、duration_msは変更しない。手動・人物追従・自由判断・keepaliveに同じ補正を一度だけ適用する。HTTPの手動操作応答はBE内部目標、`action`と`behavior.command`は反転済みの実送信値である。FW側に一度追加したHeadPose補正は撤回したため、本対応はBEデプロイだけで反映できる。先のFW修正版を書き込んだ個体は元FWへ戻す必要がある。
+
+
+### 変換済みJPEGの配信条件
+
+FEへのfps上限は設定しない。新しいrawを受信したという理由だけで、変換済みJPEGを破棄しない。同一device接続・同一stream・画像受信から3000ms以内・前回配信より新しい受信順序、を満たす結果を順次配信する。順序はuint32 frame_idの数値比較ではなくBEの受信orderを使い、IDの周回に対応する。変換待ちrawは個体ごとに最新1枚へ置換するため、すべての受信rawの変換を保証するものではない。旧接続の画像、期限切れ、遅いviewerのACK窓による保護は維持する。OpenAI送信頻度は別の評価周期で制御する。

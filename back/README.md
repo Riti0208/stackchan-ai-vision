@@ -455,3 +455,10 @@ productionの`RGB565_BIG_ENDIAN_DEVICES=stackchan-01`は、LEと宣言しなが�
 ### 首の左右補正（FW変更撤回）
 
 FWは従来のまま使う。BE内部のpanは左が負・右が正を維持し、共通送信処理で`pan`だけ符号反転してactionを作る。tilt、seq、action、expression、duration_msは変更しない。手動・人物追従・自由判断・keepaliveに同じ補正を一度だけ適用する。HTTPの手動操作応答はBE内部目標、`action`と`behavior.command`は反転済みの実送信値である。FW側に一度追加したHeadPose補正は撤回したため、本対応はBEデプロイだけで反映できる。先のFW修正版を書き込んだ個体は元FWへ戻す必要がある。
+
+
+### 完成済みJPEGの配信継続
+
+FE向けの配信fps上限は設けない。変換完了後に新しいrawフレームを受信していても、完成したJPEGが同じ接続・streamに属し、受信から3000ms以内で配信順序が新しければ配信する。変換待ちは従来どおり個体ごとの最新raw1枚だけとし、次の変換で消費する。旧接続/stream・期限切れ・配信済みより古い結果の除外と、遅いviewerのACK窓は維持する。OpenAIの評価周期は独立しており、FE配信に追従してAPIを呼び出すことはない。
+
+`test/conversion-progress.test.mjs`は変換完了後のyieldだけをテスト内のI/Oバリアへ置換し、新着受信を確実に挟む。完成済みの配信、burst時の待機raw置換、接続交換、期限切れ、frame IDの周回、STREAM_FPSによるFE間引きがないことを検証する。productionにテスト用設定や外部リクエストは追加しない。
