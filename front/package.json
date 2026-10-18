@@ -11,6 +11,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "node scripts/vision-assets.mjs && tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test:unit": "node --test test/connection.test.mjs",
     "test:smoke": "node test/smoke.mjs",
     "predev": "node scripts/vision-assets.mjs"
   },

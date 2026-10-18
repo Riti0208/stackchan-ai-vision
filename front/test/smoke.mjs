@@ -164,6 +164,27 @@ try {
     "viewer continuously ACKs at least five images within 10 seconds",
   );
   assert.equal(sockets, 1, "viewer stays connected; no reconnect loop");
+  // Decode more slowly than ingress; completed images must still draw and ACK.
+  await page.evaluate(() => {
+    const original = window.createImageBitmap.bind(window);
+    window.restoreBitmapDecoder = () => { window.createImageBitmap = original; };
+    window.createImageBitmap = async (...args) => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return original(...args);
+    };
+  });
+  const acksBeforeSlowDecode = sent.filter(m => m.type === 'frame_ack').length;
+  clearInterval(sim.frameTimer);
+  sim.frameTimer = setInterval(() => sim.sendFrame(), 1000 / 60);
+  const slowDecodeDeadline = performance.now() + 1800;
+  while (performance.now() < slowDecodeDeadline) await sleep(100);
+  assert.ok(sent.filter(m => m.type === 'frame_ack').length >= acksBeforeSlowDecode + 3,
+    'continuous ingress with 100ms decode delay keeps drawing and ACKing');
+  assert.equal(sockets, 1, 'slow decoding does not reconnect the viewer');
+  await page.evaluate(() => window.restoreBitmapDecoder());
+  clearInterval(sim.frameTimer);
+  sim.frameTimer = setInterval(() => sim.sendFrame(), 500);
+
   assert.ok(
     !sent.some((m) => ["detection", "heartbeat"].includes(m.type)),
     "public viewer never sends control input",

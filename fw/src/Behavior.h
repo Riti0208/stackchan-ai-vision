@@ -43,7 +43,10 @@ class Behavior {
     baseAction=Action::Idle;
   }
   bool accept(const ActionCommand& c,uint32_t now) {
-    if(!validCommand(c) || now-c.receivedAt>c.duration) return false;
+    // The network task can enqueue after the consumer sampled now. A small
+    // negative age is fresh, not an unsigned wrap to a multi-day expiry.
+    const int32_t age=static_cast<int32_t>(now-c.receivedAt);
+    if(!validCommand(c) || age>static_cast<int32_t>(c.duration)) return false;
     targetPan=c.action==Action::Idle?0:c.pan*30;
     targetTilt=c.action==Action::Idle?0:c.tilt*15;
     nextExpression=c.expression;

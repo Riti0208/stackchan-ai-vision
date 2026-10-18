@@ -69,3 +69,18 @@ test('new expressions preserve neck commands on older firmware',()=>{
   assert.equal(compatibleExpression(face,2),face);
  }
 });
+
+
+test('missing face_version is safe for five-face FW; explicit versions retain eight or eighteen faces',async()=>{
+ const {expressions}=await import('../src/protocol.ts');
+ const five=['neutral','happy','sad','surprised','thinking'];
+ const eight=[...five,'sleepy','love','wink'];
+ for(const face of expressions){
+  assert.ok(five.includes(compatibleExpression(face)),face);
+  assert.ok(eight.includes(compatibleExpression(face,1)),face);
+  assert.equal(compatibleExpression(face,2),face);
+ }
+ for(const face of eight)assert.equal(compatibleExpression(face,1),face);
+ assert.equal(compatibleExpression('love'),'happy');
+ assert.equal(compatibleExpression('tired'),'neutral');
+});

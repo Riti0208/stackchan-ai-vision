@@ -280,7 +280,7 @@ BEはジェスチャー中に次の追跡・ジェスチャー指令を送らな
 追跡中に検出が3秒途絶した場合は追跡を止めidleへ移る。
 FWは通信断でジェスチャーを止め、安全な待機状態へ移る。可動範囲・速度制限はFWの責任。
 
-FWは18表情対応を`device_status.data.face_version: 2`で通知する（省略時は旧8表情）。BEは通知前には新表情を旧表情に変換し、旧FWが首の指令まで拒否することを防ぐ。
+FWは18表情対応を`device_status.data.face_version: 2`で通知する。明示的な1は旧8表情、省略時は初期5表情（neutral/happy/sad/surprised/thinking）だけに変換する。通知前も最も古いFWが首の指令まで拒否しない値を使う。
 FWは接続直後と以後5秒ごとにdevice_statusを送る。未取得値はnull、未計測FPSは0。
 BEは接続直後の暫定値として`online: true, fps: 0, wifi_rssi: null, battery: null, current_action: idle`を配信可。
 FWからの無通信だけを理由にBEは接続を閉じない。device_statusや画像が15秒以上途絶しても同じstreamで再開できる。onlineはソケット接続状態を示し、稼働確認や映像鮮度の保証ではない。実際のclose/error、同じdevice_idの新接続による置換では従来どおりcleanupする。controllerの15秒heartbeat期限は別に維持する。
@@ -734,3 +734,15 @@ API予約時に回数上限・期限切れ・停止が判明した場合は`outc
 BEは現在接続のFWから受信した正常な新規SCFW rawフレームを、受信イベント内で1枚ずつ同期的にJPEGへ変換し、ACKを返せる各FEへ受信順に配信する。最新1枚への変換待ち置換とFE向けfps制限は設けない。受信イベントを越えるrawの独自キューは持たない。3秒の鮮度条件はAI・検出との照合用で、FE向けJPEG配信を間引く条件にはしない。
 
 診断用のtimer yieldは配信後だけに置き、旧接続の計測完了は旧transport統計だけを更新する。計測はencode・配信・yieldを含むwall時間で、CPU時間ではない。無効形式・重複/逆順ID・旧接続は従来どおり受け付けない。遅いFEのACK窓（120枚・8MiB・2秒）によるFE接続の切断は別のバックログ保護として維持する。FW接続をACK待ちで切断しない。OpenAIの評価頻度・明示開始/停止はFE配信から独立する。
+
+### 通信監査の動作欠落対策
+
+FEは同じ接続世代の復号済み画像を、新しいpending画像があるだけでは捨てず描画してframe_ackを返す。未着手のpending画像は最新に置き換え、後続の累積ACKで解放する。画像ACKの120枚/8MiB/2秒制限は維持する。
+
+同stream/世代の顔検出結果は、表示画像が先へ進んでいてもcontrollerからBEへ送る。BEが受信済みframe・順序・3秒鮮度を検証する。顔枠は表示中のkeyと一致した結果だけ描画する。
+
+autonomousのlook_atも意向のvalid_until内だけ1秒ごとに同じ絶対目標を再送し、FWの3秒無指令timeoutに達しないようにする。期限切れ・切断・mode変更では更新せず、gestureを繰り返す用途には使わない。手動優先とpanの送信境界反転は維持する。
+
+FWはdequeue後に適用時刻を取得する。異なるtaskの時刻採取の前後が入れ替わった小さな負のageをunsignedの巨大な期限超過と扱わない。ACKは引き続きqueue受理を表し、物理動作完了は保証しない。
+
+narrationの予約時に予算停止となった場合も共通のPaidSessionStopped処理へ渡す。API障害の代替文として新たな意向を確定せず、pipelineはdiscarded/paid_session_*となる。既に許可されたperception由来の追従と、実API失敗時の通常fallbackは従来どおり扱う。

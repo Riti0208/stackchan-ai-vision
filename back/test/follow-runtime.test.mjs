@@ -182,3 +182,42 @@ test('explicit unlimited call session reaches upstream and remains manually stop
   assert.equal(v.messages.filter(m=>m.type==='error').length,0);
  }finally{await h.close();}
 });
+
+
+test('autonomous gaze is refreshed only during the intention lease, with stable logical targets',{timeout:13000},async()=>{
+ const h=await harness({mode:'autonomous'});
+ try{
+  const d=await h.connect(),v=await h.connect('viewer');d.frame(0);
+  const a=await d.wait(m=>m.type==='action');
+  await until(()=>v.messages.some(m=>m.type==='mind'&&m.data.valid_until>Date.now()));
+  const mind=v.messages.filter(m=>m.type==='mind').at(-1).data;
+  await sleep(3500);
+  const actions=d.actions();assert.ok(actions.length>=3,'held gaze must outlive the FW 3s watchdog');
+  assert.ok(actions.every(m=>m.data.action==='look_at'&&m.data.pan===a.data.pan&&m.data.tilt===a.data.tilt));
+  assert.ok(actions.every((m,i)=>i===0||m.timestamp-actions[i-1].timestamp<2500),'renewals precede watchdog');
+  assert.equal(h.requests.length,3,'keepalive does not call upstream');
+  await sleep(Math.max(0,mind.valid_until-Date.now())+600);
+  const n=d.actions().length;await sleep(1300);assert.equal(d.actions().length,n,'expired gaze is never renewed');
+ }finally{await h.close();}
+});
+
+test('budget exhaustion at narration preserves mind and never becomes an API-error fallback',{timeout:10000},async()=>{
+ const h=await harness({mode:'autonomous',mock:true,controlled:true});
+ try{
+  const d=await h.connect(),v=await h.connect('viewer');
+  const initial=(await v.wait(m=>m.type==='mind')).data;
+  await h.control({action:'start',seconds:0,max_calls:2});d.frame(0);
+  await v.wait(m=>m.type==='telemetry'&&m.data.pipeline_total>0);
+  v.send('telemetry_request',{});const t=(await v.wait(m=>m.type==='telemetry_snapshot')).data;
+  assert.equal(h.requests.length,2,'narration is blocked before reaching upstream');
+  assert.equal(t.samples.api.at(-1).stage,'narration');
+  assert.equal(t.samples.api.at(-1).outcome,'session_stopped');
+  assert.equal(t.samples.api.at(-1).status,null);
+  assert.equal(t.samples.pipelines.at(-1).outcome,'discarded');
+  assert.equal(t.samples.pipelines.at(-1).reason,'paid_session_call_limit');
+  assert.equal(v.messages.filter(m=>m.type==='mind').length,1);
+  assert.equal(v.messages.at(0).type,'session');
+  assert.equal(v.messages.find(m=>m.type==='mind').data.revision,initial.revision);
+  assert.equal(d.actions().length,0);assert.equal(v.messages.filter(m=>m.type==='error').length,0);
+ }finally{await h.close();}
+});

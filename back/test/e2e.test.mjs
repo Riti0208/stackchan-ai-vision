@@ -245,7 +245,9 @@ test('avert intention holds its gaze despite detections; disconnected conversati
   await b.wait(x => x.type === 'action' && x.data.pan === .35);
   await sleep(900); await frame(b, 1, 'stackchan-02');
   vb.send('detection', detect(sb, 1, .75)); await sleep(100);
-  assert.ok(!b.messages.some(x => x.type === 'action' && x.data.seq > 1), 'A face position must not override the chosen avert gaze');
+  assert.ok(b.messages.filter(x => x.type === 'action').every(x =>
+    x.data.action === 'look_at' && x.data.pan === .35 && x.data.tilt === 0),
+    'A face position must not override the chosen avert gaze, including lease renewals');
   await sleep(1300); await frame(b, 2, 'stackchan-02'); await sleep(600);
   assert.ok(!vb.messages.some(x => x.type === 'dialogue' && x.data.from_stream_id === sb && x.data.reply_to), 'Do not reply to a disconnected sender');
   assert.ok(!vb.messages.some(x => x.type === 'mind' && x.data.revision > avert.revision && x.data.cause.kind === 'dialogue'));

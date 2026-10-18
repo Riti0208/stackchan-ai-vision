@@ -453,6 +453,11 @@ export class Room {
       if (d.peer && now - (d.lastHeadAt || 0) >= 1000) {
         if (now < (d.manualUntil || 0)) this.action(d, 'look_at', d.behavior?.command.expression || 'neutral', 500, '手動操作', undefined, false, true);
         else if (behaviorMode(this.env) === 'follow_person' && d.headSource === 'follow' && followFresh(d.follow, d.stream, now)) this.action(d, 'look_at', d.behavior?.command.expression || 'thinking', 250, '人物に追従（位置保持）', undefined, true);
+        else if (behaviorMode(this.env) === 'autonomous' && d.headSource === 'autonomous' &&
+          d.mind.valid_until > now && now >= d.gestureUntil && d.behavior?.command.action === 'look_at') {
+          // Refresh only a still-valid gaze, never repeat a gesture or extend an expired intention.
+          this.action(d, 'look_at', d.behavior.command.expression, 500, d.behavior.display_text);
+        }
       }
       if (now - d.lastTelemetry >= 5000) { const data = this.telemetry(d); this.broadcast(d, 'telemetry', data);  d.lastTelemetry = now; }
       if (d.peer && now - (d.lastTransportLog || 0) >= 5000) { logTransport(d, this.telemetry(d)); d.lastTransportLog = now; }
@@ -602,6 +607,7 @@ export class Room {
           text = generated.text; calls.push(generated.metrics);
           generation = { provider: 'openai', model: DECISIONS_MODEL, reason: null };
         } catch (error) {
+          if (error instanceof PaidSessionStopped) throw error;
           if (!valid()) { run.reason = 'stale_frame_or_stream'; return; }
           d.textRetryAt = Date.now() + (error instanceof OpenAIError ? error.retryAfterMs : 10000);
           generation = { provider: 'fallback', model: null, reason: error instanceof OpenAIError && error.status === 429 ? 'rate_limit' : 'api_error' };

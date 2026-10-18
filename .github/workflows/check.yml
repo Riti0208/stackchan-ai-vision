@@ -1,0 +1,44 @@
+name: Check protocol fixes
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.1'
+          cache: npm
+          cache-dependency-path: |
+            back/package-lock.json
+            front/package-lock.json
+      - run: npm ci
+        working-directory: back
+      - run: npm ci
+        working-directory: front
+      - run: npm run typecheck
+        working-directory: back
+      - run: npm run test:unit
+        working-directory: back
+      - run: npm run test:e2e
+        working-directory: back
+      - run: npm run test:unit && npm run build
+        working-directory: front
+      - run: npx playwright install --with-deps chromium
+        working-directory: front
+      - run: npm run test:smoke
+        working-directory: front
+      - name: Firmware host tests
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror fw/tests/behavior_test.cpp -o /tmp/behavior-test
+          /tmp/behavior-test
+          c++ -std=c++17 -Wall -Wextra -Werror fw/tests/wss_config_test.cpp -o /tmp/wss-config-test
+          /tmp/wss-config-test

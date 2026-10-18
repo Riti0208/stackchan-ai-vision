@@ -23,6 +23,19 @@ int main() {
   Expression invalidExpression = Expression::Neutral;
   assert(!parseExpression("not_a_face", invalidExpression));
 
+  // The producer can enqueue one millisecond after the consumer sampled time.
+  Behavior raced;
+  auto fresh=command(1,Action::LookAt,.5f,0,250,1001);
+  assert(raced.accept(fresh,1000));
+  raced.update(1000);
+  assert(raced.action()==Action::LookAt);
+  assert(raced.accept(fresh,1001));
+  assert(!raced.accept(fresh,1252));
+  // Millisecond counter wrap still distinguishes fresh from expired commands.
+  fresh.receivedAt=0xfffffff0u;
+  assert(raced.accept(fresh,10));
+  assert(!raced.accept(fresh,300));
+
   Behavior b;
   b.idle(0);
   auto tracking=command(1,Action::LookAt,1.0f,-1.0f,1000,0);
