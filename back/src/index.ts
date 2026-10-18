@@ -1,3 +1,4 @@
+import { toDeviceMotion } from './device-motion.ts';
 import { deploymentStatus } from './deployment.ts';
 import { behaviorMode, manualTarget, coarseTarget, followFresh, FOLLOW_MAX_AGE_MS, type FollowGate } from './follow-person.ts';
 import { APIDebugCache, type APIDebug } from './api-debug.ts';
@@ -441,7 +442,7 @@ export class Room {
     if (!d.peer || (!manual && Date.now() < (d.manualUntil || 0)) || (!manual && behaviorMode(this.env) === 'follow_person' && !following)) return;
     if (['nod', 'shake', 'happy'].includes(action)) { d.gestureUntil = Date.now() + duration_ms; d.lastGesture = Date.now(); }
     d.lastHeadAt = Date.now(); d.headSource = manual ? 'manual' : following ? 'follow' : 'autonomous';
-    const command: Motion = { seq: ++d.seq, action, pan: d.pan, tilt: d.tilt, expression, duration_ms };
+    const command = toDeviceMotion({ seq: ++d.seq, action, pan: d.pan, tilt: d.tilt, expression, duration_ms });
     d.actionSentAt.set(command.seq, { sent: performance.now(), frame_at: run?.frame_received_at });
     if (d.actionSentAt.size > 32) d.actionSentAt.delete(d.actionSentAt.keys().next().value!);
     send(d.peer, 'action', command);

@@ -13,7 +13,7 @@
     "test:e2e": "node --experimental-strip-types --test --test-concurrency=3 test/e2e.test.mjs test/luna-e2e.test.mjs test/paid-e2e.test.mjs test/fw-protocol.test.mjs test/follow-runtime.test.mjs",
     "build": "node --experimental-strip-types scripts/wrangler.mjs deploy --dry-run --outdir dist",
     "deploy": "node --experimental-strip-types scripts/wrangler.mjs deploy",
-    "test:unit": "node --experimental-strip-types --test test/social.test.mjs test/openai.test.mjs test/local-env.test.mjs test/perception.test.mjs test/human-actions.test.mjs test/telemetry.test.mjs test/paid-session.test.mjs test/protocol.test.mjs test/observability.test.mjs test/raw-frame.test.mjs test/monitor.test.mjs test/monitor-api.test.mjs test/deployment.test.mjs test/fetch-runtime.test.mjs test/api-debug.test.mjs test/api-debug-runtime.test.mjs test/follow-person.test.mjs test/monitor-head.test.mjs",
+    "test:unit": "node --experimental-strip-types --test test/social.test.mjs test/openai.test.mjs test/local-env.test.mjs test/perception.test.mjs test/human-actions.test.mjs test/telemetry.test.mjs test/paid-session.test.mjs test/protocol.test.mjs test/observability.test.mjs test/raw-frame.test.mjs test/monitor.test.mjs test/monitor-api.test.mjs test/deployment.test.mjs test/device-motion.test.mjs test/fetch-runtime.test.mjs test/api-debug.test.mjs test/api-debug-runtime.test.mjs test/follow-person.test.mjs test/monitor-head.test.mjs",
     "demo:openai": "node --experimental-strip-types scripts/demo.mjs --openai",
     "check:openai": "node --experimental-strip-types scripts/check-openai.mjs",
     "check:affect": "node --experimental-strip-types scripts/check-affect.mjs",

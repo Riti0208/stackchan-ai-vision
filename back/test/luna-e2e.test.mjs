@@ -108,7 +108,7 @@ for (const [room, reason] of [['invalid', 'api_error'], ['rate', 'rate_limit'], 
     const mind = (await view.wait(x => x.type === 'mind' && x.data.generation?.provider === 'fallback', 8000)).data;
     assert.equal(mind.generation.reason, reason); assert.equal(mind.generation.model, null);
     const behavior = (await view.wait(x => x.type === 'behavior' && x.data?.mind_revision === mind.revision)).data;
-    assert.equal(behavior.command.pan, -.35); await fw.wait(x => x.type === 'action');
+    assert.equal(behavior.command.pan, .35); await fw.wait(x => x.type === 'action');
     assert.ok(!JSON.stringify(view.messages).includes('NOT_FOR_CLIENTS'));
     const timing = (await view.wait(m=>m.type==='telemetry_snapshot' && m.data.samples.api.some(a=>a.stage==='narration' && a.outcome!=='success'))).data;
     const failure=timing.samples.api.find(a=>a.stage==='narration' && a.outcome!=='success');
@@ -131,7 +131,7 @@ test('delayed generation allows video and detection control while awaiting a bou
     controller.on('message', () => {}); await once(controller, 'open');
     const latest = view.messages.filter(Buffer.isBuffer).at(-1).readUInt32BE();
     controller.send(JSON.stringify({ timestamp: Date.now(), type: 'detection', data: { stream_id: stream, frame_id: latest, faces: [{ id: 0, x: .7, y: .1, width: .2, height: .3, confidence: .99 }], primary_face_id: 0 } }));
-    await fw.wait(x => x.type === 'action' && x.data.pan > 0);
+    await fw.wait(x => x.type === 'action' && x.data.pan < 0);
     await view.wait(x => x.type === 'mind' && x.data.generation?.provider === 'openai');
     assert.ok(view.messages.filter(Buffer.isBuffer).length > before);
   } finally { stop(); controller?.close(1000); fw.ws.close(1000); view.ws.close(1000); }
@@ -252,7 +252,7 @@ test('new human gestures interrupt the held intention, differ by personality and
     assert.equal(da.reaction.intent_reassessed,true);assert.equal(da.reaction.command_issued,true);
     const ca = (await va.wait(m => m.type === 'behavior' && m.data?.mind_revision === da.mind_revision)).data.command;
     const cb = (await vb.wait(m => m.type === 'behavior' && m.data?.mind_revision === db.mind_revision)).data.command;
-    assert.equal(ca.action,'happy');assert.equal(cb.action,'look_at');assert.equal(cb.pan,-.35);
+    assert.equal(ca.action,'happy');assert.equal(cb.action,'look_at');assert.equal(cb.pan,.35);
     await a.wait(m => m.type === 'action' && m.data.seq === ca.seq);await b.wait(m => m.type === 'action' && m.data.seq === cb.seq);
     const count = a.messages.filter(m => m.type === 'action').length;
     await sleep(8500);

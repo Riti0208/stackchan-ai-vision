@@ -28,7 +28,7 @@ test('head buttons have clear device labels and only send the six head actions, 
     const request=f.requests.at(-1);assert.equal(request.url,'/api/control/head?room=main&device_id=robot');assert.equal(request.method,'POST');assert.deepEqual(JSON.parse(request.body),{action});
     assert.deepEqual(JSON.parse(JSON.stringify(request.headers)),{'Content-Type':'application/json'});
   }
-  assert.match(f.ui.card().headStatus.textContent,/最後の送信目標: pan 0.20.*送信済み seq 1/);
+  assert.match(f.ui.card().headStatus.textContent,/最後の操作目標: pan 0.20.*送信済み seq 1/);
   assert.doesNotMatch(JSON.stringify(f.requests),/paid-session|Authorization|token/);
 });
 test('offline/disconnected buttons disable and cannot send; in-flight and cooldown reject duplicate sends',async()=>{

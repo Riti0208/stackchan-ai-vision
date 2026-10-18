@@ -148,7 +148,7 @@ async function receiveFrame(d, ws, raw) {
 function updateAction(d, a) {
   $('.action-name', d.root).textContent = a.action; $('.angles', d.root).textContent = `PAN ${a.pan.toFixed(2)} · TILT ${a.tilt.toFixed(2)}`; $('.seq', d.root).textContent = `SEQ ${a.seq ?? '—'} · ${a.duration_ms ?? 0} ms`;
   $('.expression', d.root).textContent = a.expression; $('.mouth', d.root).textContent = a.expression === 'happy' ? '◡' : a.expression === 'surprised' ? 'o' : '⌣';
-  $('.robot', d.root).style.transform = `perspective(250px) rotateY(${a.pan * 35}deg) rotateX(${-a.tilt * 25}deg)`;
+  $('.robot', d.root).style.transform = `perspective(250px) rotateY(${-a.pan * 35}deg) rotateX(${-a.tilt * 25}deg)`;
   if (['happy', 'nod', 'shake'].includes(a.action)) $('.robot', d.root).animate(a.action === 'shake' ? [{ rotate: '-10deg' }, { rotate: '10deg' }, { rotate: '0deg' }] : [{ translate: '0 0' }, { translate: '0 7px' }, { translate: '0 0' }], { duration: a.duration_ms });
 }
 $('#control').onclick = async () => {

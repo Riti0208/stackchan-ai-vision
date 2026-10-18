@@ -44,15 +44,15 @@ test('follow moves before slow social requests without FE, shy avert cannot over
  for(const mode of ['follow_person','autonomous']){const h=await harness({mode});h.state.socialDelay=500;try{
   const d=await h.connect();d.frame(0);const a=await d.wait(m=>m.type==='action');assert.equal((await h.health()).behavior_mode,mode);assert.equal((await d.wait(m=>m.type==='session')).data.behavior_mode,mode);
   assert.equal((await(await h.fetch('/api/rooms/main/devices')).json()).runtime.behavior_mode,mode);
-  if(mode==='follow_person'){assert.equal(a.data.action,'look_at');assert.equal(a.data.pan,.08);assert.equal(a.data.tilt,.06);assert.equal(h.requests.filter(r=>r.stage==='narration').length,0);await sleep(1400);assert.ok(d.actions().every(a=>a.data.pan===.08&&a.data.tilt===.06&&a.data.action==='look_at'));assert.ok(h.requests[0].questions.includes('person_horizontal'));}
-  else{assert.equal(a.data.pan,-.35);assert.ok(!h.requests[0].questions.includes('person_horizontal'));}
+  if(mode==='follow_person'){assert.equal(a.data.action,'look_at');assert.equal(a.data.pan,-.08);assert.equal(a.data.tilt,.06);assert.equal(h.requests.filter(r=>r.stage==='narration').length,0);await sleep(1400);assert.ok(d.actions().every(a=>a.data.pan===-.08&&a.data.tilt===.06&&a.data.action==='look_at'));assert.ok(h.requests[0].questions.includes('person_horizontal'));}
+  else{assert.equal(a.data.pan,.35);assert.ok(!h.requests[0].questions.includes('person_horizontal'));}
  }finally{await h.close();}}
 });
 
-test('Decisions image directions reach FW commands with matching signs without FE',{timeout:16000},async()=>{
+test('Decisions directions reach FW with only pan inverted, tilt unchanged, without FE',{timeout:16000},async()=>{
  for(const [x,y,pan,tilt] of [['left','center',-.08,0],['right','center',.08,0],['center','upper',0,.06],['center','lower',0,-.06],['left','lower',-.08,-.06]]){
   const h=await harness();h.state.x=x;h.state.y=y;
-  try{const d=await h.connect();d.frame(0);const action=await d.wait(m=>m.type==='action');assert.equal(action.data.pan,pan,`image ${x}/${y}: pan`);assert.equal(action.data.tilt,tilt,`image ${x}/${y}: tilt`);}finally{await h.close();}
+  try{const d=await h.connect();d.frame(0);const action=await d.wait(m=>m.type==='action');assert.equal(action.data.pan,pan===0?0:-pan,`image ${x}/${y}: pan`);assert.equal(action.data.tilt,tilt,`image ${x}/${y}: tilt`);}finally{await h.close();}
  }
 });
 
@@ -62,7 +62,7 @@ test('local mock follows but controlled API OFF never invents real-device follow
 
 test('center holds, unknown/no-person suppress steps; contradictory FE coordinates never override Decisions steering',{timeout:22000},async()=>{
  const h=await harness();try{
-  const d=await h.connect(),c=await h.connect('controller');d.frame(0);await d.wait(m=>m.type==='action');h.state.x='center';h.state.y='center';d.frame(1);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=2);await sleep(200);assert.ok(d.actions().every(m=>m.data.pan===.08&&m.data.tilt===.06));
+  const d=await h.connect(),c=await h.connect('controller');d.frame(0);await d.wait(m=>m.type==='action');h.state.x='center';h.state.y='center';d.frame(1);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=2);await sleep(200);assert.ok(d.actions().every(m=>m.data.pan===-.08&&m.data.tilt===.06));
   h.state.x='unknown';h.state.y='unknown';d.frame(2);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=3);await sleep(300);const unknown=d.actions().length;await sleep(300);assert.equal(d.actions().length,unknown);
   h.state.presence=0;d.frame(3);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=4);await sleep(200);const n=d.actions().length,stream=(await c.wait(m=>m.type==='stream'&&m.data.stream_id)).data.stream_id;
   const detect=id=>c.send('detection',{stream_id:stream,frame_id:id,faces:[{id:0,x:0,y:.8,width:.1,height:.1,confidence:.95}],primary_face_id:0});detect(3);await sleep(150);assert.equal(d.actions().length,n);
@@ -75,7 +75,7 @@ test('stop and old streams invalidate early results; final authorized budget slo
  const h=await harness({mock:true,controlled:true});try{
   const d=await h.connect();await h.control({action:'start',seconds:30,max_calls:10});h.state.delay=800;d.frame(0);await until(()=>h.requests.length>0);await h.control({action:'stop'});await sleep(1100);assert.equal(d.actions().length,0);
   await h.control({action:'start',seconds:30,max_calls:10});const count=h.requests.length;d.frame(1);await until(()=>h.requests.length>count);const next=await h.connect();await sleep(1000);assert.equal(next.actions().length,0);
-  await h.control({action:'stop'});await h.control({action:'start',seconds:0,max_calls:1});h.state.delay=50;const before=h.requests.length;next.frame(0);assert.equal((await next.wait(m=>m.type==='action')).data.pan,.08);assert.equal(h.requests.length,before+1);assert.equal((await h.health()).paid_session.reason,'call_limit');
+  await h.control({action:'stop'});await h.control({action:'start',seconds:0,max_calls:1});h.state.delay=50;const before=h.requests.length;next.frame(0);assert.equal((await next.wait(m=>m.type==='action')).data.pan,-.08);assert.equal(h.requests.length,before+1);assert.equal((await h.health()).paid_session.reason,'call_limit');
  }finally{await h.close();}
 });
 
@@ -86,14 +86,14 @@ test('manual HTTP enforces auth/origin/input/rate/offline, ACK/seq and keeps its
   assert.equal((await h.post(path,'x'.repeat(1025))).status,413);assert.equal((await h.post(path,{action:'left'},{'Content-Type':'text/plain'})).status,400);assert.equal((await h.post('/api/control/head?room=main&device_id=missing',{action:'left'})).status,404);
   const d=await h.connect();d.frame(0);const left=await(await h.head('left')).json();assert.equal(left.pan,-.2);assert.equal(left.seq,1);assert.ok(left.manual_until>Date.now()+9800);assert.equal((await h.head('up')).status,429);await sleep(120);const up=await(await h.head('up')).json();assert.equal(up.tilt,.2);assert.equal(up.pan,-.2);assert.equal(up.seq,2);
   d.send('action_ack',{seq:up.seq,accepted:true});const viewer=await h.connect('viewer');viewer.send('telemetry_request',{});assert.ok((await viewer.wait(m=>m.type==='telemetry_snapshot')).data.transport.action_ack_rtt.count>0);
-  await sleep(10500);assert.ok(d.actions().length>=8);assert.ok(d.actions().slice(1).every(m=>m.data.action==='look_at'&&m.data.pan===-.2&&m.data.tilt===.2));const n=d.actions().length;await sleep(1200);assert.equal(d.actions().length,n);assert.equal(h.requests.length,0);
+  await sleep(10500);assert.ok(d.actions().length>=8);assert.ok(d.actions().slice(1).every(m=>m.data.action==='look_at'&&m.data.pan===.2&&m.data.tilt===.2));const n=d.actions().length;await sleep(1200);assert.equal(d.actions().length,n);assert.equal(h.requests.length,0);
   const center=await(await h.head('center')).json();assert.equal(center.pan,0);assert.equal(center.tilt,0);await sleep(120);const resume=await(await h.head('resume')).json();assert.equal(resume.manual_until,0);assert.equal(resume.seq,center.seq);
  }finally{await h.close();}
 });
 
 test('manual targets resist pending follow/social results; reconnect clears manual state and restarts seq',{timeout:15000},async()=>{
  for(const mode of ['follow_person','autonomous']){const h=await harness({mode});h.state.delay=400;h.state.socialDelay=150;try{
-  const d=await h.connect();d.frame(0);await until(()=>h.requests.length>0);const manual=await(await h.head('left')).json();await sleep(1200);const resumed=await(await h.head('resume')).json();assert.equal(resumed.pan,manual.pan);assert.equal(resumed.tilt,manual.tilt);assert.ok(d.actions().every(m=>m.data.action==='look_at'&&m.data.pan===-.2&&m.data.tilt===0));
+  const d=await h.connect();d.frame(0);await until(()=>h.requests.length>0);const manual=await(await h.head('left')).json();await sleep(1200);const resumed=await(await h.head('resume')).json();assert.equal(resumed.pan,manual.pan);assert.equal(resumed.tilt,manual.tilt);assert.ok(d.actions().every(m=>m.data.action==='look_at'&&m.data.pan===.2&&m.data.tilt===0));
   const next=await h.connect();await sleep(120);const center=await(await h.head('center')).json();assert.equal(center.seq,1);assert.equal(next.actions().at(-1).data.pan,0);
  }finally{await h.close();}}
 });
@@ -121,4 +121,20 @@ test('mixed deployments report updating and reject start without a grant; stop r
    assert.equal((await h.control({action:'stop'})).status,200);assert.equal((await h.health()).paid_session.reason,'stopped');
   }finally{await h.close();}
  }
+});
+
+
+test('repeated manual targets retain logical state while every wire command inverts only pan',{timeout:10000},async()=>{
+ const h=await harness({mock:true,controlled:true});
+ try{
+  const d=await h.connect();
+  for(const [action,pan,tilt] of [['left',-.2,0],['up',-.2,.2],['left',-.4,.2],['right',-.2,.2],['down',-.2,0],['center',0,0]]){
+   const r=await h.head(action);assert.equal(r.status,200);const target=await r.json();
+   assert.equal(target.pan,pan);assert.equal(target.tilt,tilt);
+   const sent=await d.wait(m=>m.type==='action'&&m.data.seq===target.seq);
+   assert.equal(sent.data.pan,pan===0?0:-pan);assert.equal(sent.data.tilt,tilt);assert.equal(sent.data.action,'look_at');
+   await sleep(120);
+  }
+  assert.equal(h.requests.length,0);
+ }finally{await h.close();}
 });

@@ -85,7 +85,7 @@ test('two devices: exact JPEG relay, per-device control, mock decision and recon
   const pa = await frame(a, 0), pb = await frame(b, 0, 'stackchan-02');
   assert.deepEqual(await va.wait(Buffer.isBuffer), pa); assert.deepEqual(await vb.wait(Buffer.isBuffer), pb); assert.notDeepEqual(pa, pb);
   va.send('detection', detect(stream, 0));
-  const tracking = await a.wait(x => x.type === 'action' && x.data.action === 'look_at'); assert.ok(tracking.data.pan > 0); assert.ok(tracking.data.tilt > 0);
+  const tracking = await a.wait(x => x.type === 'action' && x.data.action === 'look_at'); assert.ok(tracking.data.pan < 0); assert.ok(tracking.data.tilt > 0);
   assert.ok(!b.messages.some(x => x.type === 'action' && x.data.action === 'look_at'), 'A detection must not steer B');
   const decision = await va.wait(x => x.type === 'decision'); assert.equal(decision.data.stream_id, stream); assert.equal(decision.data.frame_id, 0);
   assert.ok(va.messages.some(x => x.type === 'emotion' && x.data.happiness > .5));
@@ -231,7 +231,7 @@ test('avert intention holds its gaze despite detections; disconnected conversati
   a.ws.close(1000); await va.wait(x => x.type === 'stream' && x.data.stream_id === null);
   await frame(b, 0, 'stackchan-02');
   const avert = (await vb.wait(x => x.type === 'mind' && x.data.intent === 'avert')).data;
-  await b.wait(x => x.type === 'action' && x.data.pan === -.35);
+  await b.wait(x => x.type === 'action' && x.data.pan === .35);
   await sleep(900); await frame(b, 1, 'stackchan-02');
   vb.send('detection', detect(sb, 1, .75)); await sleep(100);
   assert.ok(!b.messages.some(x => x.type === 'action' && x.data.seq > 1), 'A face position must not override the chosen avert gaze');

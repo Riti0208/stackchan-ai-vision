@@ -134,7 +134,7 @@ function updateHead(card){
   if(!card.headButtons)return;
   for(const button of card.headButtons)button.disabled=!headEnabled(card)||card.headBusy||Date.now()<(card.headCooldown||0);
   const head=card.head;
-  card.headStatus.textContent=head?'最後の送信目標: pan '+head.pan.toFixed(2)+' / tilt '+head.tilt.toFixed(2)+' · 送信済み seq '+head.seq+' · '+(head.manual_until>Date.now()?'手動期限 '+new Date(head.manual_until).toLocaleTimeString()+'（残り '+Math.ceil((head.manual_until-Date.now())/1000)+'秒）':head.manual_until?'手動期限終了':'手動解除'):'この画面からの手動指令なし';
+  card.headStatus.textContent=head?'最後の操作目標: pan '+head.pan.toFixed(2)+' / tilt '+head.tilt.toFixed(2)+' · 送信済み seq '+head.seq+' · '+(head.manual_until>Date.now()?'手動期限 '+new Date(head.manual_until).toLocaleTimeString()+'（残り '+Math.ceil((head.manual_until-Date.now())/1000)+'秒）':head.manual_until?'手動期限終了':'手動解除'):'この画面からの手動指令なし';
 }
 function renderHead(id,card,root){
   const section=text('section','',root);section.className='head-controls';section.setAttribute('aria-label',id+' 首の手動操作');text('h3','首の手動操作',section);
