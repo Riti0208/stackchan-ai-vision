@@ -1,13 +1,14 @@
+import { PaidSessionStopped } from './api-outcomes.ts';
 import { captureDebug, captureErrorResponse, redactDebugText, type APIDebug } from './api-debug.ts';
 export const DECISIONS_MODEL = 'gpt-6-luna';
 export type CallMetrics = { model: string; endpoint: 'decisions' | 'responses'; request_id: string | null; input_tokens: number; output_tokens: number; latency_ms: number };
-export type APITiming = { endpoint: CallMetrics['endpoint']; model: string; started_at: number; completed_at: number; rtt_ms: number; headers_ms: number | null; status: number | null; request_id: string | null; outcome: 'success' | 'http_error' | 'timeout' | 'network_error' | 'invalid_response' | 'configuration_error'; input_tokens: number | null; output_tokens: number | null };
+export type APITiming = { endpoint: CallMetrics['endpoint']; model: string; started_at: number; completed_at: number; rtt_ms: number; headers_ms: number | null; status: number | null; request_id: string | null; outcome: 'success' | 'refused' | 'session_stopped' | 'http_error' | 'timeout' | 'network_error' | 'invalid_response' | 'configuration_error'; input_tokens: number | null; output_tokens: number | null };
 type TimingContext = { sample: APITiming; phase: 'config' | 'fetch' | 'body' | 'validate'; start: number; debug?: APIDebug };
 async function measured<T>(endpoint: CallMetrics['endpoint'], observer: ((timing: APITiming) => void) | undefined, operation: (context: TimingContext) => Promise<T>, secret: string, debugObserver?: (detail: APIDebug) => void): Promise<T> {
   const context: TimingContext = { phase: 'config', start: performance.now(), ...(debugObserver ? { debug: { method: 'POST' as const, url: `https://api.openai.com/v1/${endpoint}`, request: captureDebug(null, 0, secret), response: null, error: null } } : {}), sample: { endpoint, model: DECISIONS_MODEL, started_at: Date.now(), completed_at: 0, rtt_ms: 0, headers_ms: null, status: null, request_id: null, outcome: 'success', input_tokens: null, output_tokens: null } };
   try { return await operation(context); }
   catch (error) {
-    context.sample.outcome = context.phase === 'config' ? 'configuration_error' : error instanceof Error && ['TimeoutError','AbortError'].includes(error.name) ? 'timeout' : error instanceof OpenAIError ? 'http_error' : context.phase === 'fetch' ? 'network_error' : 'invalid_response';
+    context.sample.outcome = error instanceof PaidSessionStopped ? 'session_stopped' : error instanceof DecisionsRefused ? 'refused' : context.phase === 'config' ? 'configuration_error' : error instanceof Error && ['TimeoutError','AbortError'].includes(error.name) ? 'timeout' : error instanceof OpenAIError ? 'http_error' : context.phase === 'fetch' ? 'network_error' : 'invalid_response';
     if (context.debug) {
       const message = redactDebugText(error instanceof Error ? error.message : String(error), secret).slice(0, 2000);
       context.debug.error = { name: redactDebugText(error instanceof Error ? error.name : 'Error', secret).slice(0, 100), message, phase: context.phase, guard_reason: message.startsWith('Paid API session') ? message : null };
@@ -19,6 +20,9 @@ async function measured<T>(endpoint: CallMetrics['endpoint'], observer: ((timing
     try { observer?.({ ...context.sample }); } catch { /* observer failure is isolated */ }
     if (context.debug) { try { debugObserver?.(context.debug); } catch { /* body inspection never changes API behavior */ } }
   }
+}
+export class DecisionsRefused extends Error {
+  constructor() { super('Decisions returned an unanswered question'); this.name = 'DecisionsRefused'; }
 }
 export class OpenAIError extends Error {
   status: number; retryAfterMs: number; requestId: string | null;
@@ -77,6 +81,7 @@ export async function callDecisions(apiKey: string, payload: object, fetcher: ty
   return measured('decisions', observer, async timing => {
   const result = await requestOpenAI(apiKey, 'decisions', payload, fetcher, timeoutMs, timing);
   if (!Array.isArray(result.body.answers)) throw new Error('Invalid Decisions API response');
+  if (result.body.answers.some((answer: any) => answer?.type === 'refusal')) throw new DecisionsRefused();
   return result;
   }, apiKey, debugObserver);
 }

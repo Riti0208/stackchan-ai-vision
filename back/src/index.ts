@@ -7,11 +7,11 @@ import { FrameWindow } from './frame-window';
 import { monitorHTML, monitorJS } from './monitor';
 import { logCloseRequested, logConnection, logRun, logTransport } from './observability';
 import { serializeServer, parseClientMessage, isHeadCommand, type HeadResponse, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
-import { paidSession, reservePaidCall, guardedFetch, controlledBudget, updatePaidSession, type BudgetStatus, type ControlledPaidEnv } from './paid-session';
+import { paidSession, reservePaidCall, guardedFetch, PaidSessionStopped, controlledBudget, updatePaidSession, type BudgetStatus, type ControlledPaidEnv } from './paid-session';
 import { newHistory, newTransport, recordRun, receiveFrame, addSample, pacing, snapshot, type History, type Transport, type Pipeline, type Stage } from './telemetry';
 import { initialHumanActions, scanHumanActions, consumeHumanAction, type HumanActionState } from './human-actions';
 import { choosePersonality, initialEmotion, personalities, isPersonality } from './personality';
-import { callDecisions, callNarration, summarizeCalls, OpenAIError, DECISIONS_MODEL, type APITiming, type CallMetrics } from './openai';
+import { callDecisions, callNarration, summarizeCalls, OpenAIError, DecisionsRefused, DECISIONS_MODEL, type APITiming, type CallMetrics } from './openai';
 import { narrationPayload, needsNarration, fallbackNarration, mockNarration } from './narration';
 import { initialMind, planFor, expressionForEmotion, compatibleExpression, socialContext, mockChoice, type Mind, type Behavior, type Dialogue, type PublicPeer, type Motion, type Personality } from './social';
 import { evaluationPayload, parseEvaluation, mockEvaluation, projectExperiences, emotionKeys, type Emotion, type Experience, type Affect } from './perception';
@@ -473,13 +473,27 @@ export class Room {
       }
       if (d.lastDetection && d.mind.intent === 'observe' && now - d.lastDetection > 3000 && now >= d.gestureUntil) { this.action(d, 'idle', 'neutral', 500); d.lastDetection = 0; }
       if ((this.env.ENABLE_PAID_CONTROL === 'true' || this.env.AI_MODE !== 'decisions' || paidSession(this.env).active) && d.peer && d.latest && now >= d.retryAt && !d.busy && now - d.lastAI >= pacing(this.env).evaluation_interval_ms && d.latest.order > d.lastDecision && now - d.latest.at <= 3000) {
-        const stream = d.stream;
+        const stream = d.stream, evaluatedOrder = d.latest.order;
         d.lastAI = now; d.busy = true;
         const started = performance.now();
         const run: Pipeline = { id: crypto.randomUUID(), stream_id: stream!, frame_id: d.latest.id, frame_received_at: d.latest.at, started_at: now, completed_at: 0, duration_ms: 0, outcome: 'discarded', reason: 'state_changed', api: [] };
         const controller = new AbortController(); d.evaluation = controller; this.pendingAI.add(controller);
         this.ctx.waitUntil(this.decide(d, run, controller.signal).catch(error => {
           if (controller.signal.aborted) { run.reason = d.stream === stream ? 'paid_session_changed' : 'stream_changed'; return; }
+          if (error instanceof PaidSessionStopped) {
+            run.outcome = 'discarded'; run.reason = `paid_session_${error.reason}`;
+            if (d.stream === stream) { d.follow = undefined; d.lastDecision = Math.max(d.lastDecision, evaluatedOrder); }
+            return; // Local budget guard prevented sending; the WebSocket remains healthy.
+          }
+          if (error instanceof DecisionsRefused) {
+            run.outcome = 'discarded'; run.reason = 'decisions_refused';
+            if (d.stream === stream) {
+              if (run.api.at(-1)?.stage === 'perception') d.follow = undefined;
+              d.lastDecision = Math.max(d.lastDecision, evaluatedOrder);
+              d.retryAt = Date.now() + 10000;
+            }
+            return; // Expected API result: preserve state, no FE connection error or immediate retry.
+          }
           run.outcome = 'error'; run.reason = error instanceof OpenAIError ? `http_${error.status}` : 'evaluation_failed';
           const last = run.api.at(-1);
           if (d.stream === stream && last?.stage === 'perception') d.follow = undefined; if (error instanceof Error && /^(Invalid|Missing|Duplicate)/.test(error.message) && last?.outcome === 'success') last.outcome = 'invalid_response';

@@ -10,7 +10,7 @@ function storage() {
   return { transaction(fn) { const result = tail.then(() => fn(tx)); tail = result.catch(() => {}); return result; } };
 }
 test('no session, invalid limits, mock and expiry all fail closed', () => {
-  for (const extra of [{ PAID_SESSION_ID: '' }, { PAID_SESSION_UNTIL: '' }, { PAID_SESSION_UNTIL: '0' }, { PAID_SESSION_MAX_CALLS: '0' }, { PAID_SESSION_MAX_CALLS: '1.5' }, { PAID_SESSION_MAX_CALLS: '1001' }, { AI_MODE: 'mock' }]) assert.equal(paidSession(configuration(extra)).active, false);
+  for (const extra of [{ PAID_SESSION_ID: '' }, { PAID_SESSION_UNTIL: '' }, { PAID_SESSION_UNTIL: '0' }, { PAID_SESSION_MAX_CALLS: '' }, { PAID_SESSION_MAX_CALLS: '1.5' }, { PAID_SESSION_MAX_CALLS: '-1' }, { AI_MODE: 'mock' }]) assert.equal(paidSession(configuration(extra)).active, false);
   assert.equal(paidSession(configuration(), 0, Number(configuration().PAID_SESSION_UNTIL) + 1).reason, 'expired');
 });
 test('concurrent rooms/devices share a durable cap; restart and reconnect cannot replenish it', async () => {
@@ -46,7 +46,7 @@ test('session deadline aborts an in-flight request', async () => {
 test('CLI has finite defaults and refuses typos, unbounded and duplicated options', () => {
   assert.deepEqual(demoLimits(), { seconds: 60, maxCalls: 30 });
   assert.deepEqual(demoLimits(['--openai', '--seconds', '120', '--max-calls', '50', '--same-image']), { seconds: 120, maxCalls: 50 });
-  for (const args of [['--seconds'], ['--seconds', '0'], ['--seconds', 'Infinity'], ['--seconds', '601'], ['--max-calls', '1001'], ['--max-calls', '1.5'], ['--max-calls', '3', '--max-calls', '4'], ['--opneai']]) assert.throws(() => demoLimits(args));
+  for (const args of [['--seconds'], ['--seconds', '0'], ['--seconds', 'Infinity'], ['--seconds', '601'], ['--max-calls', '-1'], ['--max-calls', '1.5'], ['--max-calls', '3', '--max-calls', '4'], ['--opneai']]) assert.throws(() => demoLimits(args));
 });
 test('default local configuration forces mock and strips keys/start grants even if local settings request real mode', async () => {
   const prepared = await prepareMockConfig({ AI_MODE: 'decisions', OPENAI_API_KEY: 'must-not-copy', OPENAI_API_KEY_REF: 'op://must/not/read', PAID_SESSION_ID: 'old-start', ROOM_CONFIG: '{}', SESSION_SECRET: 'fixture-session', ALLOWED_ORIGIN: 'http://127.0.0.1:8787' });
@@ -89,7 +89,7 @@ test('manual session bounds, capability and API key are enforced before any gran
   const state=storage(), env={ENABLE_PAID_CONTROL:'true',OPENAI_API_KEY:'fake'};
   await assert.rejects(updatePaidSession(state,{}, {action:'start',seconds:300,max_calls:100}),/control_disabled/);
   await assert.rejects(updatePaidSession(state,{ENABLE_PAID_CONTROL:'true'}, {action:'start',seconds:300,max_calls:100}),/key_not_configured/);
-  for(const [seconds,max_calls] of [[-1,100],[601,100],[300,0],[300,1001],[1.5,2]]) await assert.rejects(updatePaidSession(state,env,{action:'start',seconds,max_calls}),/invalid_limits/);
+  for(const [seconds,max_calls] of [[-1,100],[601,100],[300,-1],[300,Number.MAX_SAFE_INTEGER+1],[1.5,2]]) await assert.rejects(updatePaidSession(state,env,{action:'start',seconds,max_calls}),/invalid_limits/);
   assert.equal((await controlledBudget(state,env)).active,false);
 });
 
@@ -118,4 +118,17 @@ test('unlimited requests preserve caller cancellation and do not bypass missing 
  const controller=new AbortController();controller.abort();
  const guard=guardedFetch(env,async()=>({active:true,reason:null,expires_at:null}),async(_url,init)=>{assert.equal(init.signal,controller.signal);assert.equal(init.signal.aborted,true);return new Response();});
  await guard('https://example.test',{signal:controller.signal});
+});
+
+test('explicit zero removes call caps while counting persists across reservations and stop still wins',async()=>{
+ const state=storage(),env={ENABLE_PAID_CONTROL:'true',OPENAI_API_KEY:'fake',VERSION_METADATA:{id:'v1'}};
+ const started=await updatePaidSession(state,env,{action:'start',seconds:0,max_calls:0});assert.equal(started.active,true);assert.equal(started.max_calls,0);
+ for(let i=0;i<1005;i++)assert.equal((await controlledBudget(state,env,true,started.session_id)).active,true);
+ assert.equal((await controlledBudget(state,env)).used_calls,1005);assert.equal((await controlledBudget(state,env)).reason,null);
+ await updatePaidSession(state,env,{action:'stop'});assert.equal((await controlledBudget(state,env,true,started.session_id)).active,false);
+ const larger=await updatePaidSession(state,env,{action:'start',seconds:30,max_calls:5000});assert.equal(larger.max_calls,5000);
+ assert.equal(paidSession(configuration({PAID_SESSION_MAX_CALLS:'0'}),5001).active,true);
+ assert.equal(paidSession(configuration({PAID_SESSION_MAX_CALLS:'5000'}),4999).active,true);
+ assert.equal(paidSession(configuration({PAID_SESSION_MAX_CALLS:'5000'}),5000).reason,'call_limit');
+ assert.equal(demoLimits(['--max-calls','0']).maxCalls,0);assert.equal(demoLimits(['--max-calls','5000']).maxCalls,5000);
 });

@@ -32,14 +32,14 @@ export function demoLimits(args = []) {
     if (!allowed.has(args[i])) throw new Error(`Unknown option: ${args[i]}`);
     if (['--seconds', '--max-calls'].includes(args[i])) i++;
   }
-  const number = (name, fallback, max) => {
+  const number = (name, fallback, max, min = 1) => {
     const positions = args.flatMap((v, i) => v === name ? [i] : []);
     if (positions.length > 1) throw new Error(`Duplicate option: ${name}`);
     const value = positions.length ? Number(args[positions[0] + 1]) : fallback;
-    if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${name} must be an integer between 1 and ${max}`);
+    if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`${name} must be an integer between ${min} and ${max}`);
     return value;
   };
-  return { seconds: number('--seconds', 60, 600), maxCalls: number('--max-calls', 30, 1000) };
+  return { seconds: number('--seconds', 60, 600), maxCalls: number('--max-calls', 30, Number.MAX_SAFE_INTEGER, 0) };
 }
 export async function prepareMockConfig(local) { return prepareConfig(local, null, null); }
 export async function prepareOpenAIConfig(local, limits = demoLimits()) {

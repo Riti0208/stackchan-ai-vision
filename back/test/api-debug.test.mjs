@@ -42,7 +42,9 @@ test('upstream-before-response exceptions include their real name/message and gu
   let upstream = 0;
   const guarded = guardedFetch({}, async () => assert.fail('must not reserve'), async () => { upstream++; });
   const denied = await inspect({}, guarded);
-  assert.equal(upstream, 0); assert.equal(denied.detail.error.guard_reason, 'Paid API session is not active');
+  assert.equal(upstream, 0); assert.equal(denied.detail.error.guard_reason, 'Paid API session is not active'); assert.equal(denied.timing.outcome,'session_stopped');
+  const capped=guardedFetch({AI_MODE:'decisions',PAID_SESSION_ID:'test',PAID_SESSION_UNTIL:String(Date.now()+60000),PAID_SESSION_MAX_CALLS:'1'},async()=>({active:false,reason:'call_limit',expires_at:Date.now()+60000}),async()=>{upstream++;});
+  const limit=await inspect({},capped);assert.equal(upstream,0);assert.equal(limit.timing.outcome,'session_stopped');assert.equal(limit.timing.status,null);assert.equal(limit.detail.error.guard_reason,'Paid API session stopped: call_limit');
   const stopped = await inspect({}, async () => { throw new DOMException('Session stopped', 'AbortError'); });
   const expired = await inspect({}, async () => { throw new DOMException('Deadline expired', 'TimeoutError'); });
   assert.equal(stopped.detail.error.name, 'AbortError'); assert.equal(expired.detail.error.name, 'TimeoutError');

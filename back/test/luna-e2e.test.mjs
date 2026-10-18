@@ -203,7 +203,8 @@ test('a refused emotional score preserves all five feelings and issues no new mo
   const fw = await connect('bad_emotion', 'stackchan-01', true), view = await connect('bad_emotion', 'stackchan-01'), stop = await pump([fw]);
   try {
     const initial = (await view.wait(x => x.type === 'emotion')).data;
-    await view.wait(x => x.type === 'error' && x.data.code === 'ai_unavailable');
+    await view.wait(x => x.type === 'telemetry' && x.data.pipeline.discarded > 0);
+    assert.ok(!view.messages.some(x => x.type === 'error'));
     assert.deepEqual(view.messages.filter(x => x.type === 'emotion').at(-1).data, initial);
     assert.ok(!view.messages.some(x => x.type === 'decision')); assert.ok(!fw.messages.some(x => x.type === 'action'));
   } finally { stop(); fw.ws.close(1000); view.ws.close(1000); }

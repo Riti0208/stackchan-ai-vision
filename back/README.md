@@ -156,7 +156,7 @@ Decisionsの観察・意向選択とResponsesの文章生成を合算し、失�
 もう一度使う場合は、再度コマンドを明示的に実行する。
 
 ```sh
-# 必要な場合だけ時間・回数を指定（上限: 600秒 / 1000回）
+# 必要な場合だけ時間・回数を指定（時間の上限: 600秒。回数は0=無制限、正数=指定回数）
 npm run demo:openai -- --seconds 120 --max-calls 50
 ```
 
@@ -268,7 +268,7 @@ unset CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
 ### 公開環境でDecisions＋Lunaを有効にする
 
 現実装には画像観察・意向選択・文章生成のアダプターを含む。実APIの疎通/品質確認は上記のスモークテストで別途行う。
-`OPENAI_API_KEY`をsecretへ設定する。公開環境でも`AI_MODE=decisions`だけではAPIは動かない。有効な`PAID_SESSION_ID`（開始ごとに新しいID）、`PAID_SESSION_UNTIL`（期限のUnixミリ秒）、`PAID_SESSION_MAX_CALLS`（1〜1000）を明示設定して初めて送信可能になる。公開デバッグは下記のモニターの開始・停止パネルを使う。
+`OPENAI_API_KEY`をsecretへ設定する。公開環境でも`AI_MODE=decisions`だけではAPIは動かない。有効な`PAID_SESSION_ID`（開始ごとに新しいID）、`PAID_SESSION_UNTIL`（期限のUnixミリ秒）、`PAID_SESSION_MAX_CALLS`（0=無制限、正数=指定回数）を明示設定して初めて送信可能になる。公開デバッグは下記のモニターの開始・停止パネルを使う。
 API利用料が発生する。設定変更だけで意図せず呼び出さないよう、既定値は常にmock。
 
 ```sh
@@ -392,7 +392,7 @@ WebSocketのリアルタイムログは接続終了まで表示されない場�
 ### モニターで実APIを切り替える
 
 公開設定は`ENABLE_PAID_CONTROL=true`。`main`に認証後、「実APIのデバッグ」で有効時間と回数上限を指定し、「実APIを開始（課金あり）」を押す。
-初期状態はOFF。既定は300秒・全ルーム合計100回、最大600秒・1000回。
+初期状態はOFF。モニターの既定は時間・回数とも無制限（seconds:0 / max_calls:0）。時間指定は最大600秒、回数の1000上限は撤廃。
 時間・回数のどちらかに到達すると新しい呼び出しを止め、モック処理に戻る。「実APIを停止」で手動停止もできる。
 新しい開始操作まで再開しない。ページ表示、接続、リロード、再接続、ヘルスチェックは開始・延長・予算リセットを行わない。
 有効なセッション中の二重開始は409で拒否する。使用量は全ルーム・全個体・全APIの合計で、失敗や中断も予約回数を消費する。
@@ -444,7 +444,7 @@ productionの`RGB565_BIG_ENDIAN_DEVICES=stackchan-01`は、LEと宣言しなが�
 
 ### デバッグ用実APIの時間制限（2026-10-18更新）
 
-モニターからの明示開始は時間無制限を既定にする。開始bodyの`seconds:0`は時間無制限で、active時の`expires_at:null`を意味する。1〜600は従来の秒数指定として使える。`max_calls`は従来どおり必須の整数1〜1000で、全ルーム・全デバイス共通の予約回数上限を維持する。時間無制限でも手動停止、回数上限、デプロイ世代変更で失効し、画面を開く/再接続するだけでは開始・延長・回数リセットしない。APIごとのタイムアウトと停止時の中断は維持する。CLIローカルデモの有期限設定は変更しない。
+モニターからの明示開始は時間無制限を既定にする。開始bodyの`seconds:0`は時間無制限で、active時の`expires_at:null`を意味する。1〜600は従来の秒数指定として使える。`max_calls`は従来どおり必須の0以上の安全な整数（0=回数無制限、正数=その回数で停止）で、全ルーム・全デバイス共通の予約回数上限を維持する。時間無制限でも手動停止、回数上限、デプロイ世代変更で失効し、画面を開く/再接続するだけでは開始・延長・回数リセットしない。APIごとのタイムアウトと停止時の中断は維持する。CLIローカルデモの有期限設定は変更しない。
 
 
 ### デプロイ反映中の操作
@@ -472,3 +472,15 @@ Decisionsの既存2軸choiceを各5帯＋unknownに拡張し、同じperception�
 ### FW接続の無通信時（2026-10-18更新）
 
 BEはFWのdevice_status/画像/heartbeatが届かない時間だけを理由に接続を閉じない。15秒以上無通信でも同じstreamで再開できる。実際のclose/errorまたは同じdevice_idの置換時はcleanupする。onlineはソケット状態であり、映像の鮮度とは区別する。controllerのheartbeat期限、古い画像によるAI判断の禁止、FW側の動作watchdogは従来どおり。
+
+### Decisionsの回答不可（refusal）
+
+HTTP 200でも各質問に`{type:"refusal",name:"mouth_open"}`等が返ることがある（[公式ガイド](https://developers.openai.com/api/docs/guides/decisions)）。BEは値を0や推測した感情に置換せず、その評価を見送り、既存の感情・意向を維持する。perceptionの回答不可では追従gateも解除する。intentionの回答不可では、その直前に有効なperceptionから発行済みの首目標は取り消さない。
+
+モニターのAPI結果は`outcome:refused`（回答不可）、HTTP 200とusageを残し、pipelineは`outcome:discarded, reason:decisions_refused`とする。FE向けの汎用`ai_unavailable`通信エラーは送らない。既存の10秒待機を維持し、同じ評価済み画像を再送せず、新しいフレームで通常の評価を再開する。質問の言い換え・再送や自動的な追加API呼び出しは行わない。
+
+API予約時に回数上限・期限切れ・停止が判明した場合は`outcome:session_stopped`（API利用停止）、HTTP statusはnull、pipeline reasonは`paid_session_call_limit`等とする。OpenAIへ未送信でありnetwork_errorやFEの通信エラーにしない。上限・期限・明示開始の条件は緩和しない。
+
+### デバッグの回数無制限（2026-10-18更新）
+
+`max_calls:0`は回数無制限。モニターは時間・回数とも0を既定とし、開始は引き続き明示操作のみ。正の安全な整数なら指定回数で停止し、1000回という上限は設けない。時間制限、手動停止、デプロイ世代変更は維持する。`used_calls`は無制限でも共通予算actorで数え続け、画面には「使用回数 / 無制限」と表示する。既存セッションの上限を勝手に変更・再開始しない。CLIは従来の60秒/30回を既定に保ち、`--max-calls 0`を明示した場合だけ回数無制限になる。

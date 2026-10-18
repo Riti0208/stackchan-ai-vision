@@ -1,9 +1,11 @@
+import { PaidSessionStopped } from './api-outcomes.ts';
+export { PaidSessionStopped } from './api-outcomes.ts';
 export type PaidEnv = { AI_MODE?: string; PAID_SESSION_ID?: string; PAID_SESSION_UNLIMITED?: string; PAID_SESSION_UNTIL?: string; PAID_SESSION_MAX_CALLS?: string };
 export function paidSession(env: PaidEnv, used = 0, now = Date.now()) {
   const unlimited = env.PAID_SESSION_UNLIMITED === 'true';
   const expires_at = Number(env.PAID_SESSION_UNTIL), max_calls = Number(env.PAID_SESSION_MAX_CALLS);
-  const configured = !!env.PAID_SESSION_ID && /^[a-zA-Z0-9_-]{1,80}$/.test(env.PAID_SESSION_ID) && (unlimited ? env.PAID_SESSION_UNTIL === '0' : Number.isSafeInteger(expires_at) && expires_at > 0) && Number.isSafeInteger(max_calls) && max_calls > 0 && max_calls <= 1000;
-  const reason = env.AI_MODE !== 'decisions' ? 'mock' : !configured ? 'not_started' : !unlimited && now >= expires_at ? 'expired' : used >= max_calls ? 'call_limit' : null;
+  const configured = !!env.PAID_SESSION_ID && /^[a-zA-Z0-9_-]{1,80}$/.test(env.PAID_SESSION_ID) && (unlimited ? env.PAID_SESSION_UNTIL === '0' : Number.isSafeInteger(expires_at) && expires_at > 0) && !!env.PAID_SESSION_MAX_CALLS?.trim() && Number.isSafeInteger(max_calls) && max_calls >= 0;
+  const reason = env.AI_MODE !== 'decisions' ? 'mock' : !configured ? 'not_started' : !unlimited && now >= expires_at ? 'expired' : max_calls > 0 && used >= max_calls ? 'call_limit' : null;
   return { active: reason === null, reason, expires_at: configured && !unlimited ? expires_at : null, max_calls: configured ? max_calls : 0, used_calls: used };
 }
 // A single internal Room actor owns the count for every device and room in a session.
@@ -23,9 +25,10 @@ export async function reservePaidCall(storage: DurableObjectStorage, env: PaidEn
 }
 export function guardedFetch(env: PaidEnv, reserve: () => Promise<{ active: boolean; reason: string | null; expires_at: number | null }>, outbound: typeof fetch): typeof fetch {
   return async (input, init) => {
-    if (!paidSession(env).active) throw new Error('Paid API session is not active');
+    const status = paidSession(env);
+    if (!status.active) throw new PaidSessionStopped(status.reason || 'not_started', 'Paid API session is not active');
     const permission = await reserve();
-    if (!permission.active || (permission.expires_at === null ? env.PAID_SESSION_UNLIMITED !== 'true' : Date.now() >= permission.expires_at)) throw new Error(`Paid API session stopped: ${permission.reason || 'expired'}`);
+    if (!permission.active || (permission.expires_at === null ? env.PAID_SESSION_UNLIMITED !== 'true' : Date.now() >= permission.expires_at)) throw new PaidSessionStopped(permission.reason || 'expired');
     const deadline = permission.expires_at === null ? undefined : AbortSignal.timeout(Math.max(1, permission.expires_at - Date.now()));
     const original = init?.signal || (input instanceof Request ? input.signal : undefined);
     return outbound(input, { ...init, signal: deadline ? original ? AbortSignal.any([original, deadline]) : deadline : original });
@@ -37,7 +40,7 @@ type ManualSession = { id: string; epoch: string; until: number | null; max: num
 export type BudgetStatus = ReturnType<typeof paidSession> & { session_id?: string | null };
 function manualStatus(record: ManualSession | undefined, env: ControlledPaidEnv): BudgetStatus {
   const base = { expires_at: record?.until || null, max_calls: record?.max || 0, used_calls: record?.used || 0, session_id: record?.id || null };
-  const reason = !record ? 'not_started' : record.stopped ? 'stopped' : record.epoch !== (env.VERSION_METADATA?.id || 'local') ? 'deployment_changed' : record.until !== null && Date.now() >= record.until ? 'expired' : record.used >= record.max ? 'call_limit' : null;
+  const reason = !record ? 'not_started' : record.stopped ? 'stopped' : record.epoch !== (env.VERSION_METADATA?.id || 'local') ? 'deployment_changed' : record.until !== null && Date.now() >= record.until ? 'expired' : record.max > 0 && record.used >= record.max ? 'call_limit' : null;
   return { ...base, active: reason === null, reason };
 }
 export async function controlledBudget(storage: DurableObjectStorage, env: ControlledPaidEnv, reserve = false, expected?: string): Promise<BudgetStatus> {
@@ -57,7 +60,7 @@ export async function updatePaidSession(storage: DurableObjectStorage, env: Cont
   if (env.ENABLE_PAID_CONTROL !== 'true') throw new Error('control_disabled');
   if (command.action === 'start') {
     if (!env.OPENAI_API_KEY?.trim()) throw new Error('key_not_configured');
-    if (!Number.isSafeInteger(command.seconds) || command.seconds! < 0 || command.seconds! > 600 || !Number.isSafeInteger(command.max_calls) || command.max_calls! < 1 || command.max_calls! > 1000) throw new Error('invalid_limits');
+    if (!Number.isSafeInteger(command.seconds) || command.seconds! < 0 || command.seconds! > 600 || !Number.isSafeInteger(command.max_calls) || command.max_calls! < 0) throw new Error('invalid_limits');
   }
   return storage.transaction(async tx => {
     let record = await tx.get<ManualSession>('manual-paid-session');

@@ -47,7 +47,7 @@ test('paid duration defaults to unlimited and null expiry is displayed without r
   assert.equal(requests[0].url,'/api/control/paid-session?room=main');
   requests.length=0;
   for(const seconds of ['-1','601','1.5']){get('paid-seconds').value=seconds;await ui.command('start');}
-  get('paid-seconds').value='0';for(const calls of ['0','1001','1.5']){get('paid-calls').value=calls;await ui.command('start');}
+  get('paid-seconds').value='0';for(const calls of ['-1','9007199254740992','1.5','']){get('paid-calls').value=calls;await ui.command('start');}
   assert.equal(requests.length,0);assert.match(get('paid-result').textContent,/0〜600秒/);
   get('paid-seconds').value='600';get('paid-calls').value='1000';await ui.command('start');
   assert.deepEqual(JSON.parse(requests[0].body),{action:'start',seconds:600,max_calls:1000});
@@ -64,4 +64,13 @@ test('updating deployment disables start without sending and keeps stop availabl
  get('paid-seconds').value='0';get('paid-calls').value='100';await ui.command('start');assert.equal(requests.length,0);
  await ui.command('stop');assert.deepEqual(JSON.parse(requests[0].body),{action:'stop'});assert.equal(get('paid-start').disabled,true);
  health={...health,deployment:{ready:true},paid_session:{...health.paid_session,active:false}};ui.show(health);assert.equal(get('paid-start').disabled,false);assert.equal(requests.filter(x=>x.method==='POST').length,1);
+});
+
+test('monitor accepts explicit unlimited or larger call budgets and labels unlimited status',async()=>{
+ const elements=new Map(),requests=[];
+ const get=id=>{if(!elements.has(id))elements.set(id,{addEventListener(){}});return elements.get(id);};
+ const health={ai_mode:'mock',paid_control:{enabled:true,key_configured:true,room:'main'},paid_session:{active:true,expires_at:null,max_calls:0,used_calls:1005},deployment:{ready:true}};
+ const ui=runInNewContext(monitorJS+`\n({show(h){running=true;currentRoom='main';lastHealth=h;showPaid()},command:paidCommand})`,{document:{getElementById:get},window:{addEventListener(){}},setInterval(){},Date,AbortSignal,URLSearchParams,fetch:async(url,init)=>{requests.push({url,...init});return {ok:true,json:async()=>url.startsWith('/health')?health:{ok:true}};}});
+ ui.show(health);assert.match(get('paid-result').textContent,/1005 \/ 無制限/);assert.equal(requests.length,0);
+ for(const max of [0,5000]){get('paid-seconds').value='0';get('paid-calls').value=String(max);requests.length=0;await ui.command('start');assert.deepEqual(JSON.parse(requests[0].body),{action:'start',seconds:0,max_calls:max});}
 });

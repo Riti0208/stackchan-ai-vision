@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { callDecisions, callNarration, summarizeCalls, OpenAIError } from '../src/openai.ts';
+import { callDecisions, callNarration, summarizeCalls, OpenAIError, DecisionsRefused } from '../src/openai.ts';
 import { narrationPayload, needsNarration, mockNarration } from '../src/narration.ts';
 import { socialContext, initialMind } from '../src/social.ts';
 
@@ -90,4 +90,14 @@ test('timeout and semantic narration failure remain timed attempts',async()=>{
  assert.equal(records[0].outcome,'timeout');assert.equal(records[0].status,null);assert.ok(records[0].rtt_ms>=15);
  await assert.rejects(callNarration('fixture',{},false,response(completed({thought:'',public_text:null})),3000,s=>records.push(s)));
  assert.equal(records[1].outcome,'invalid_response');assert.equal(records[1].input_tokens,100);
+});
+
+test('HTTP 200 partial refusal is an expected typed result with usage, no retry and inspectable body',async()=>{
+ const samples=[],details=[];let calls=0;
+ await assert.rejects(callDecisions('fixture-key',{},async()=>{
+  calls++;return Response.json({answers:[{type:'predicate',name:'person_present',probability:.35},{type:'refusal',name:'mouth_open'}],usage:{input_tokens:4233,output_tokens:0}},{headers:{'x-request-id':'req-refusal'}});
+ },4000,s=>samples.push(s),d=>details.push(d)),DecisionsRefused);
+ assert.equal(calls,1);assert.equal(samples.length,1);assert.equal(samples[0].outcome,'refused');assert.equal(samples[0].status,200);
+ assert.equal(samples[0].input_tokens,4233);assert.equal(samples[0].request_id,'req-refusal');
+ assert.deepEqual({...details[0].response.body.answers[1]},{type:'refusal',name:'mouth_open'});
 });
