@@ -351,20 +351,17 @@ test('device v2 contract rejects every malformed raw header and legacy JPEG uplo
   assert.equal(code,packet.length>38416?1009:1008);
  }
 });
-test('raw bursts publish every accepted frame in order with bounded conversion metrics',async()=>{
+test('raw bursts retain latest frame, bounded conversion metrics and valid JPEG output',async()=>{
  const device=await connect('stackchan-02','device','dev-device-02'),viewer=await connect('stackchan-02');
  const raw=await syntheticRawPacket(0);
  try {
-  for(let batch=0;batch<4;batch++){
-   for(let id=batch*50;id<(batch+1)*50;id++){const p=Buffer.from(raw);p.writeUInt32BE(id,10);device.ws.send(p);}
-   await viewer.wait(m=>Buffer.isBuffer(m)&&m.readUInt32BE()===batch*50+49);
-  }
+  for(let id=0;id<200;id++){const p=Buffer.from(raw);p.writeUInt32BE(id,10);device.ws.send(p);}
   const last=await viewer.wait(m=>Buffer.isBuffer(m)&&m.readUInt32BE()===199);
   const metadata=await sharp(last.subarray(4)).metadata();assert.equal(metadata.width,160);assert.equal(metadata.height,120);
   await sleep(1100);viewer.send('telemetry_request',{});
   const t=(await viewer.wait(m=>m.type==='telemetry_snapshot'&&m.data.transport.frames_received===200)).data.transport;
   assert.equal(t.input_format,'rgb565le-v2');assert.equal(t.bytes_received,200*38416);
-  assert.equal(t.conversion.dropped_total,0);assert.ok(t.conversion.count<=120);assert.equal(t.conversion.published_total,200);assert.deepEqual(viewer.messages.filter(Buffer.isBuffer).map(p=>p.readUInt32BE()),Array.from({length:200},(_,i)=>i));assert.equal(t.conversion.errors,0);
+  assert.ok(t.conversion.dropped_total>0);assert.ok(t.conversion.count<=120);assert.ok(t.conversion.published_total<200);assert.equal(t.conversion.errors,0);
   assert.equal(t.conversion.timing,'encode_and_yield_wall_ms');
  }finally{viewer.ws.close(1000);device.ws.close(1000);}
 });
