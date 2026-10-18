@@ -282,7 +282,8 @@ FWは通信断でジェスチャーを止め、安全な待機状態へ移る。
 
 FWは接続直後と以後5秒ごとにdevice_statusを送る。未取得値はnull、未計測FPSは0。
 BEは接続直後の暫定値として`online: true, fps: 0, wifi_rssi: null, battery: null, current_action: idle`を配信可。
-`device_status`は稼働情報であり、未受信を理由にBEはデバイスWSを閉じない。接続状態はWebSocketの切断イベントで更新し、通信断はFWのPing/Pongと再接続で復旧する。
+FWからの無通信だけを理由にBEは接続を閉じない。device_statusや画像が15秒以上途絶しても同じstreamで再開できる。onlineはソケット接続状態を示し、稼働確認や映像鮮度の保証ではない。実際のclose/error、同じdevice_idの新接続による置換では従来どおりcleanupする。controllerの15秒heartbeat期限は別に維持する。
+通信断はFWのPing/Pongと再接続で復旧する。
 本体切断時はBEが同じ形式で`online: false, fps: 0, wifi_rssi: null, battery: null, current_action: idle`を通知する。
 このidleはオフライン表示用であり、実機の停止完了を確認した値ではない。
 
@@ -674,7 +675,7 @@ rawは38416 bytes/枚で、60fpsなら約18.44Mbps/台（WS/TLS/TCP別）。60fp
 
 Env `BEHAVIOR_MODE=follow_person|autonomous`。今回の公開/ローカルはfollow_person、既存自由判断はautonomousで保持する。health.behavior_mode、session.behavior_mode（追加optional項目）、一覧runtime.behavior_modeで観測できる。モード変更自体はAPIを開始しない。
 
-follow_personは同じperceptionのquestionsに`person_horizontal` choice（left/center/right/unknown）と`person_vertical` choice（upper/center/lower/unknown）を追加する。返却は既存choiceの`choice`/`confidence`。最大の見える顔、顔が明瞭でなければ最大の人物の同じ中心を対象とする。中央40〜60%は保持し、正確な座標/bboxは推定させない。person_present>=0.5、各軸confidence>=0.65でpan±0.08、tilt±0.06の有界stepをperception直後に反映する。
+follow_personは同じperceptionのquestionsに`person_horizontal` choice（far_left/left/center/right/far_right/unknown）と`person_vertical` choice（far_upper/upper/center/lower/far_lower/unknown）を追加する。返却は既存choiceの`choice`/`confidence`。最大の見える顔、顔が明瞭でなければ最大の人物の同じ中心を対象とする。中央40〜60%は保持し、正確な座標/bboxは推定させない。person_present>=0.5、各軸confidence>=0.65で中央寄りの帯（20〜40% / 60〜80%）はpan±0.2、tilt±0.16、外側の帯（0〜20% / 80〜100%）はpan±0.4、tilt±0.32の有界stepをperception直後に反映する。
 人物有りgateは元画像受信から最大6000msかつsession期限まで。同一stream/新しい評価だけを適用し、停止済み応答は捨てる。follow_personではFE detectionによる首の更新は行わず、Decisions応答だけで方向を決定する。送信画像座標を使い、左→pan負、右→pan正、上→tilt正、下→tilt負。鏡像や人物の身体基準に変換しない。autonomousの既存FE detection制御は維持する。全角度は[-1,1]。公開paid control環境のAPI OFF時は追従待機、ローカルmockだけデモ追従する。既存の明示開始・期限・予算・停止を維持する。
 
 `POST /api/control/head?room=<room>&device_id=<id>`は既存room Cookie認証とexact Origin、Content-Type application/jsonを要求する。本文は1024 bytes以下、`{"action":"left"}`のaction 1項目のみ。left/right/up/down/center/resumeを許可し、他キーや値を拒否する。未知room/deviceは404、未認証401、Origin違反403、不正入力400、超過413、offline409、100ms未満の連続操作429。controller leaseは取得しない。
@@ -708,3 +709,9 @@ FWは従来のまま使う。BE内部のpanは左が負・右が正を維持し�
 ### 変換済みJPEGの配信条件
 
 FEへのfps上限は設定しない。新しいrawを受信したという理由だけで、変換済みJPEGを破棄しない。同一device接続・同一stream・画像受信から3000ms以内・前回配信より新しい受信順序、を満たす結果を順次配信する。順序はuint32 frame_idの数値比較ではなくBEの受信orderを使い、IDの周回に対応する。変換待ちrawは個体ごとに最新1枚へ置換するため、すべての受信rawの変換を保証するものではない。旧接続の画像、期限切れ、遅いviewerのACK窓による保護は維持する。OpenAI送信頻度は別の評価周期で制御する。
+
+### 人物追従の補正量（2026-10-18更新）
+
+Decisionsの既存2軸choiceを各5帯＋unknownに拡張し、同じperceptionリクエストで対象の中央からの離れ具合を分類する。中央40〜60%は保持、内側20〜40% / 60〜80%は左右6°・上下2.4°、外側0〜20% / 80〜100%は左右12°・上下4.8°を1回の補正上限とする。境界ちょうどは中央に近い帯を選ぶ。角度はFWの現行pan×30° / tilt×15°換算。送る値は補正後の絶対目標で[-1,1]に制限し、共通送信境界のpan反転は維持する。
+
+補正は新しい評価につき一度だけ適用する。1秒keepaliveは同じ絶対目標を再送するだけで、古い位置を根拠に角度を足し続けない。人物無し・不確実な軸・古い画像・停止・再接続・手動優先のガードは維持する。APIの呼び出し間隔/回数とFWの速度設定は変更しない。ローカルmockも同じ5帯の分類と補正量を使う。実サーボ位置のフィードバックは無く、追従の体感と分類精度は実機での調整対象。

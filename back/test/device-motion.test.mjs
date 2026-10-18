@@ -11,9 +11,9 @@ test('all action kinds adapt only pan without mutating logical pose or other wir
 test('image left/lower and repeated manual left preserve down and adapt legacy FW yaw',()=>{
  const target=coarseTarget(0,0,{horizontal:{label:'left',confidence:.9},vertical:{label:'lower',confidence:.9}});
  const wire=toDeviceMotion({seq:1,action:'look_at',...target,expression:'thinking',duration_ms:250});
- assert.equal(wire.pan,.08);assert.equal(wire.tilt,-.06);
+ assert.equal(wire.pan,.2);assert.equal(wire.tilt,-.16);
  // Unmodified FW Behavior scales pan*30deg then moveHead negates yaw.
- assert.equal(-wire.pan*30,-2.4);assert.ok(Math.abs(wire.tilt*15+.9)<1e-9);
+ assert.equal(-wire.pan*30,-6);assert.ok(Math.abs(wire.tilt*15+2.4)<1e-9);
  let logical={pan:0,tilt:.2};
  for(let i=0;i<2;i++)logical=manualTarget(logical.pan,logical.tilt,'left');
  const second=toDeviceMotion({seq:2,action:'look_at',...logical,expression:'neutral',duration_ms:500});

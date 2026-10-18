@@ -44,7 +44,7 @@ test('follow moves before slow social requests without FE, shy avert cannot over
  for(const mode of ['follow_person','autonomous']){const h=await harness({mode});h.state.socialDelay=500;try{
   const d=await h.connect();d.frame(0);const a=await d.wait(m=>m.type==='action');assert.equal((await h.health()).behavior_mode,mode);assert.equal((await d.wait(m=>m.type==='session')).data.behavior_mode,mode);
   assert.equal((await(await h.fetch('/api/rooms/main/devices')).json()).runtime.behavior_mode,mode);
-  if(mode==='follow_person'){assert.equal(a.data.action,'look_at');assert.equal(a.data.pan,-.08);assert.equal(a.data.tilt,.06);assert.equal(h.requests.filter(r=>r.stage==='narration').length,0);await sleep(1400);assert.ok(d.actions().every(a=>a.data.pan===-.08&&a.data.tilt===.06&&a.data.action==='look_at'));assert.ok(h.requests[0].questions.includes('person_horizontal'));}
+  if(mode==='follow_person'){assert.equal(a.data.action,'look_at');assert.equal(a.data.pan,-.2);assert.equal(a.data.tilt,.16);assert.equal(h.requests.filter(r=>r.stage==='narration').length,0);await sleep(1400);assert.ok(d.actions().every(a=>a.data.pan===-.2&&a.data.tilt===.16&&a.data.action==='look_at'));assert.ok(h.requests[0].questions.includes('person_horizontal'));}
   else{assert.equal(a.data.pan,.35);assert.ok(!h.requests[0].questions.includes('person_horizontal'));}
  }finally{await h.close();}}
 });
@@ -60,7 +60,7 @@ test('device status telemetry gaps do not close an otherwise open device WebSock
 });
 
 test('Decisions directions reach FW with only pan inverted, tilt unchanged, without FE',{timeout:16000},async()=>{
- for(const [x,y,pan,tilt] of [['left','center',-.08,0],['right','center',.08,0],['center','upper',0,.06],['center','lower',0,-.06],['left','lower',-.08,-.06]]){
+ for(const [x,y,pan,tilt] of [['left','center',-.2,0],['right','center',.2,0],['center','upper',0,.16],['center','lower',0,-.16],['left','lower',-.2,-.16],['far_left','far_lower',-.4,-.32],['far_left','far_upper',-.4,.32],['far_right','far_lower',.4,-.32],['far_right','far_upper',.4,.32]]){
   const h=await harness();h.state.x=x;h.state.y=y;
   try{const d=await h.connect();d.frame(0);const action=await d.wait(m=>m.type==='action');assert.equal(action.data.pan,pan===0?0:-pan,`image ${x}/${y}: pan`);assert.equal(action.data.tilt,tilt,`image ${x}/${y}: tilt`);}finally{await h.close();}
  }
@@ -72,7 +72,7 @@ test('local mock follows but controlled API OFF never invents real-device follow
 
 test('center holds, unknown/no-person suppress steps; contradictory FE coordinates never override Decisions steering',{timeout:22000},async()=>{
  const h=await harness();try{
-  const d=await h.connect(),c=await h.connect('controller');d.frame(0);await d.wait(m=>m.type==='action');h.state.x='center';h.state.y='center';d.frame(1);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=2);await sleep(200);assert.ok(d.actions().every(m=>m.data.pan===-.08&&m.data.tilt===.06));
+  const d=await h.connect(),c=await h.connect('controller');d.frame(0);await d.wait(m=>m.type==='action');h.state.x='center';h.state.y='center';d.frame(1);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=2);await sleep(200);assert.ok(d.actions().every(m=>m.data.pan===-.2&&m.data.tilt===.16));
   h.state.x='unknown';h.state.y='unknown';d.frame(2);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=3);await sleep(300);const unknown=d.actions().length;await sleep(300);assert.equal(d.actions().length,unknown);
   h.state.presence=0;d.frame(3);await until(()=>h.requests.filter(r=>r.stage==='perception').length>=4);await sleep(200);const n=d.actions().length,stream=(await c.wait(m=>m.type==='stream'&&m.data.stream_id)).data.stream_id;
   const detect=id=>c.send('detection',{stream_id:stream,frame_id:id,faces:[{id:0,x:0,y:.8,width:.1,height:.1,confidence:.95}],primary_face_id:0});detect(3);await sleep(150);assert.equal(d.actions().length,n);
@@ -85,7 +85,7 @@ test('stop and old streams invalidate early results; final authorized budget slo
  const h=await harness({mock:true,controlled:true});try{
   const d=await h.connect();await h.control({action:'start',seconds:30,max_calls:10});h.state.delay=800;d.frame(0);await until(()=>h.requests.length>0);await h.control({action:'stop'});await sleep(1100);assert.equal(d.actions().length,0);
   await h.control({action:'start',seconds:30,max_calls:10});const count=h.requests.length;d.frame(1);await until(()=>h.requests.length>count);const next=await h.connect();await sleep(1000);assert.equal(next.actions().length,0);
-  await h.control({action:'stop'});await h.control({action:'start',seconds:0,max_calls:1});h.state.delay=50;const before=h.requests.length;next.frame(0);assert.equal((await next.wait(m=>m.type==='action')).data.pan,-.08);assert.equal(h.requests.length,before+1);assert.equal((await h.health()).paid_session.reason,'call_limit');
+  await h.control({action:'stop'});await h.control({action:'start',seconds:0,max_calls:1});h.state.delay=50;const before=h.requests.length;next.frame(0);assert.equal((await next.wait(m=>m.type==='action')).data.pan,-.2);assert.equal(h.requests.length,before+1);assert.equal((await h.health()).paid_session.reason,'call_limit');
  }finally{await h.close();}
 });
 

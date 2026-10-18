@@ -172,16 +172,27 @@ test('an unacknowledged viewer expires even after the device stops sending frame
   } finally { ws.close(1000); device.ws.close(1000); }
 });
 
-test('missing status/heartbeat expires device and control leases and releases control', async () => {
+test('silent device stays connected and resumes frames while idle controller lease is released', async () => {
   await sleep(100);
   const device = await connect('stackchan-01', 'device', 'dev-device-01');
+  const viewer = await connect('stackchan-01');
+  const stream = (await viewer.wait(x => x.type === 'stream')).data.stream_id;
   const controller = await connect('stackchan-01', 'controller', cookie);
-  const deviceClosed = once(device.ws, 'close'), controlClosed = once(controller.ws, 'close');
-  const result = await Promise.race([Promise.all([deviceClosed, controlClosed]), sleep(18000).then(() => { throw new Error('Status/heartbeat timeout was not enforced'); })]);
-  assert.deepEqual(result.map(x => x[0]), [4000, 4000]);
-  const takeover = await connect('stackchan-01', 'controller', otherCookie);
-  const status = await takeover.wait(x => x.type === 'device_status'); assert.equal(status.data.online, false);
-  takeover.ws.close(1000);
+  let deviceClosed = false; device.ws.on('close', () => { deviceClosed = true; });
+  try {
+    const result = await Promise.race([once(controller.ws, 'close'), sleep(18000).then(() => { throw new Error('Controller heartbeat timeout was not enforced'); })]);
+    assert.equal(result[0], 4000);
+    await sleep(1000); // Device has also been completely silent beyond its former 15s timeout.
+    assert.equal(deviceClosed, false); assert.equal(device.ws.readyState, WebSocket.OPEN);
+    const takeover = await connect('stackchan-01', 'controller', otherCookie);
+    try {
+      assert.equal((await takeover.wait(x => x.type === 'device_status')).data.online, true);
+      assert.equal((await takeover.wait(x => x.type === 'stream')).data.stream_id, stream);
+      const expected = await frame(device, 987);
+      const received = await viewer.wait(x => Buffer.isBuffer(x) && x.readUInt32BE() === 987);
+      assert.deepEqual(received, expected);
+    } finally { takeover.ws.close(1000); }
+  } finally { viewer.ws.close(1000); controller.ws.close(1000); device.ws.close(1000); }
 });
 
 

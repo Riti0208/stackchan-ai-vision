@@ -466,6 +466,7 @@ export class Room {
       if (d.peer && now - (d.lastTransportLog || 0) >= 5000) { logTransport(d, this.telemetry(d)); d.lastTransportLog = now; }
       for (const viewer of d.viewers) if (viewer.frames.expired(monotonicNow)) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); }
       for (const viewer of d.viewers) if (viewer.monitor && viewer.expires! <= now) { close(viewer, 4003, 'session_expired'); this.cleanup(viewer, d); }
+      // Device silence alone does not close the socket; explicit close/error or replacement cleans up.
       if (d.controller && (d.controller.expires! <= now || now - d.controller.seen >= 15000)) {
         const p = d.controller; close(p, p.expires! <= now ? 4003 : 4000, 'controller_timeout'); this.cleanup(p, d);
       }

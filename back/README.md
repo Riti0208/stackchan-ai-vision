@@ -427,7 +427,7 @@ BEデプロイとv2 FW書き込みを協調する。**BE公開後〜FW更新完�
 
 `BEHAVIOR_MODE=follow_person|autonomous`で切り替える。今回のproduction/local/OpenAIデモ設定は`follow_person`。戻す場合は`autonomous`に変更して再デプロイ・再起動する。未設定/不正値は既存のautonomousを使う。`/health.behavior_mode`、device/viewerのsession.behavior_mode、デバイス一覧のruntime.behavior_modeで確認する。WorkerとRoomの更新伝播には差があるため、公開確認では両方を照合する。
 
-追従は既存の同じperceptionリクエストに人物位置の左右/上下choiceを追加し、API呼び出し数を増やさない。最大の顔、顔が不明瞭なら最大の人物を対象とする粗い分類であり、bboxや正確な座標ではない。中央40〜60%は保持。person_present>=0.5かつ位置confidence>=0.65の軸を、pan±0.08/tilt±0.06ずつ[-1,1]内で更新する。perception直後にlook_atを送り、意向/文章生成を待たない。感情・本音・会話の更新は維持し、性格・avert・heldやsocial gestureが首を上書きしない。
+追従は既存の同じperceptionリクエストに人物位置の左右/上下choiceを追加し、API呼び出し数を増やさない。最大の顔、顔が不明瞭なら最大の人物を対象とする粗い分類であり、bboxや正確な座標ではない。中央40〜60%は保持。person_present>=0.5かつ位置confidence>=0.65の軸を、中央寄り（20〜40% / 60〜80%）はpan±0.2/tilt±0.16、外側（0〜20% / 80〜100%）はpan±0.4/tilt±0.32ずつ[-1,1]内で更新する。perception直後にlook_atを送り、意向/文章生成を待たない。感情・本音・会話の更新は維持し、性格・avert・heldやsocial gestureが首を上書きしない。
 
 FE controllerは必須ではない。follow_personではFE detectionによる首の更新を行わず、Decisionsのperson_horizontal/person_verticalだけから方向を決める。送信画像上の左→pan負、右→pan正、上→tilt正、下→tilt負とし、鏡像や人の身体基準に読み替えない。元画像受信から最大6秒・同一stream・API期限内のみ有効。人無し、位置不確実、期限・世代・停止で追従更新を止める。有効な追従targetだけ1秒ごとに同じ角度を再送し、FWの3秒watchdogに対応する。期限後は再送しない。
 
@@ -462,3 +462,13 @@ FWは従来のまま使う。BE内部のpanは左が負・右が正を維持し�
 FE向けの配信fps上限は設けない。変換完了後に新しいrawフレームを受信していても、完成したJPEGが同じ接続・streamに属し、受信から3000ms以内で配信順序が新しければ配信する。変換待ちは従来どおり個体ごとの最新raw1枚だけとし、次の変換で消費する。旧接続/stream・期限切れ・配信済みより古い結果の除外と、遅いviewerのACK窓は維持する。OpenAIの評価周期は独立しており、FE配信に追従してAPIを呼び出すことはない。
 
 `test/conversion-progress.test.mjs`は変換完了後のyieldだけをテスト内のI/Oバリアへ置換し、新着受信を確実に挟む。完成済みの配信、burst時の待機raw置換、接続交換、期限切れ、frame IDの周回、STREAM_FPSによるFE間引きがないことを検証する。productionにテスト用設定や外部リクエストは追加しない。
+
+### 人物追従の補正量（2026-10-18更新）
+
+Decisionsの既存2軸choiceを各5帯＋unknownに拡張し、同じperceptionリクエストで対象の中央からの離れ具合を分類する。中央40〜60%は保持、内側20〜40% / 60〜80%は左右6°・上下2.4°、外側0〜20% / 80〜100%は左右12°・上下4.8°を1回の補正上限とする。境界ちょうどは中央に近い帯を選ぶ。角度はFWの現行pan×30° / tilt×15°換算。送る値は補正後の絶対目標で[-1,1]に制限し、共通送信境界のpan反転は維持する。
+
+補正は新しい評価につき一度だけ適用する。1秒keepaliveは同じ絶対目標を再送するだけで、古い位置を根拠に角度を足し続けない。人物無し・不確実な軸・古い画像・停止・再接続・手動優先のガードは維持する。APIの呼び出し間隔/回数とFWの速度設定は変更しない。ローカルmockも同じ5帯の分類と補正量を使う。実サーボ位置のフィードバックは無く、追従の体感と分類精度は実機での調整対象。
+
+### FW接続の無通信時（2026-10-18更新）
+
+BEはFWのdevice_status/画像/heartbeatが届かない時間だけを理由に接続を閉じない。15秒以上無通信でも同じstreamで再開できる。実際のclose/errorまたは同じdevice_idの置換時はcleanupする。onlineはソケット状態であり、映像の鮮度とは区別する。controllerのheartbeat期限、古い画像によるAI判断の禁止、FW側の動作watchdogは従来どおり。

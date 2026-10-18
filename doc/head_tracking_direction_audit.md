@@ -10,19 +10,19 @@
 ## コード経路と修正
 
 1. Decisionsの同一perception要求に `person_horizontal` と `person_vertical` のchoiceが入る。
-2. APIは画像中の対象中心の位置を返す。`left/lower` の信頼度が各0.65以上で、人物有り・鮮度・セッション等のガードを満たすと `coarseTarget()` はpanを0.08、tiltを0.06減らす。
+2. APIは画像中の対象中心の位置を返す。`left/lower` の信頼度が各0.65以上で、人物有り・鮮度・セッション等のガードを満たすと `coarseTarget()` は中央寄りならpanを0.2、tiltを0.16減らす。画像端のfar_left/far_lowerならpanを0.4、tiltを0.32減らす。
 3. BEは正規化した**絶対目標値**をactionで送る。送信直前にpanだけを反転する。follow_personではFE detectionは方向を上書きしない。
 4. FW Behaviorは `pan * 30°` と `tilt * 15°` に変換し、補間した角度を0.1°単位で `moveHead()` に渡す。
 5. FWは従来の `Motion.move(-pan, 450 + tilt, speed)` のまま。BEが送信panを反転するので、既存FWのyaw反転と組み合わせて意図した方向へ動く。手動・追従・自由判断・keepaliveはすべて共通送信境界を使う。
 
-正面（0,0）からの一回の応答例:
+正面（0,0）からの一回の応答例（中央寄りの帯。外側のfar_*は補正量が倍）:
 
 | 画像中の顔中心 | Decisions | BE内部 pan / tilt | FW送信 pan / tilt | 既存FW yaw / pitch（0.1°） |
 |---|---|---|---|---|
-| 左下 | left / lower | -0.08 / -0.06 | +0.08 / -0.06 | -24 / 441 |
-| 左上 | left / upper | -0.08 / +0.06 | +0.08 / +0.06 | -24 / 459 |
-| 右下 | right / lower | +0.08 / -0.06 | -0.08 / -0.06 | +24 / 441 |
-| 右上 | right / upper | +0.08 / +0.06 | -0.08 / +0.06 | +24 / 459 |
+| 左下 | left / lower | -0.2 / -0.16 | +0.2 / -0.16 | -60 / 426 |
+| 左上 | left / upper | -0.2 / +0.16 | +0.2 / +0.16 | -60 / 474 |
+| 右下 | right / lower | +0.2 / -0.16 | -0.2 / -0.16 | +60 / 426 |
+| 右上 | right / upper | +0.2 / +0.16 | -0.2 / +0.16 | +60 / 474 |
 | 中央 | center / center | 目標を保持 | 同じ反転済み目標 | 目標を保持 |
 
 `action`と`behavior.command`は実際にFWへ送った値を示す。手動HTTP応答とモニターの操作目標はBE内部基準（左が負・右が正）を維持する。シミュレーターの受信ログも送信値を保持し、ローカルE2Eのロボット表示はpanを内部基準に戻して描画する。
@@ -34,7 +34,7 @@
 - 左上が原点、xは右へ、yは下へ増える。
 - 「画像中で顔がどこにあるか」を返す。顔の向き・視線や「動いた後で画像がどちらへ流れるか」は答えない。
 - 画像を鏡像・回転として読み替えない。顔が傾いていても同じ画像座標を使う。
-- 左下の顔は `left / lower`、右上の顔は `right / upper`。
+- 左下の顔は `left / lower`、右上の顔は `right / upper`。各軸の外側20%では `far_left / far_lower`、`far_right / far_upper` を使う。
 - 中央40–60%は保持。不確かな軸はunknown。モデルにサーボ角度やハードウェアの符号を選ばせない。
 
 choiceとconfidenceを使う形式自体は[OpenAI公式Decisionsガイド](https://developers.openai.com/api/docs/guides/decisions)と一致する。プロンプトの明確化は実APIの位置分類精度の保証ではない。今回は課金APIを開始していない。
