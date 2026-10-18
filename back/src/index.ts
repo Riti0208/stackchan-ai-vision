@@ -147,6 +147,7 @@ export class Room {
   private identities = new Map<string, Identity>();
   private metricHistory = new Map<string, History>();
   private ready: Promise<void>;
+  private lastRuntimeMode = 'not_evaluated';
   private activeAPICalls = new Map<string, ServerData['api_activity']>();
   private pendingAI = new Set<AbortController>();
   constructor(private ctx: DurableObjectState, private env: Env, private aiFetch: typeof fetch = fetch) {
@@ -226,7 +227,7 @@ export class Room {
       const payload = b64(JSON.stringify({ room, sid, expires }));
       return json({ room, authenticated: true, expires_in: 43200 }, 200, { 'Set-Cookie': `sc_control_${room}=${payload}.${await sign(payload, this.env.SESSION_SECRET!)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${req.headers.get('X-Secure') === 'true' ? '; Secure' : ''}` });
     }
-    if (url.pathname === '/list') return json({ room, devices: Object.keys(config(this.env)[room].devices).map(device_id => ({ device_id, online: !!this.device(device_id, room).peer })) });
+    if (url.pathname === '/list') return json({ room, runtime: { ai_mode: this.lastRuntimeMode, paid_control_enabled: this.env.ENABLE_PAID_CONTROL === 'true', key_configured: !!this.env.OPENAI_API_KEY?.trim(), version: this.env.VERSION_METADATA?.id || null }, devices: Object.keys(config(this.env)[room].devices).map(device_id => ({ device_id, online: !!this.device(device_id, room).peer })) });
     const id = url.searchParams.get('device_id')!, d = this.device(id, room);
     const role = req.headers.get('X-Role') as Peer['role'], sid = req.headers.get('X-Sid') || undefined;
     if (role === 'controller' && d.controller && d.controller.sid !== sid) return fail(409, 'controller_busy');
@@ -383,6 +384,7 @@ export class Room {
     const status: BudgetStatus | undefined = controlled ? await (await this.env.ROOMS.get(this.env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : undefined;
     if (signal.aborted || d.stream !== stream || !d.peer) return;
     const mode = controlled ? status?.active ? 'decisions' : 'mock' : this.env.AI_MODE;
+    this.lastRuntimeMode = mode || 'unknown';
     const runEnv = controlled ? { AI_MODE: mode, PAID_SESSION_ID: status?.session_id || '', PAID_SESSION_UNTIL: String(status?.expires_at || 0), PAID_SESSION_MAX_CALLS: String(status?.max_calls || 0) } : this.env;
     const aiFetch = guardedFetch(runEnv, async () => {
       const url = new URL('https://room.internal/paid-budget');

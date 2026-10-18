@@ -609,3 +609,6 @@ JSONのWebSocketモニター契約は引き続き読み取り専用。開始・�
 `state=started`ではstarted_at、`state=completed`ではAPISample型のsampleを返す。
 モニター専用接続だけへ送信し、本体や既存のFEには追加イベントを流さない。
 受信時に進行中の呼び出しがあればstartedを送る。過去の完了履歴はtelemetry_snapshotで補完する。
+
+`GET /api/rooms/<room>/devices`は診断用runtime（最後に評価したai_mode、paid_control_enabled、
+key_configured、実行バージョン）も返す。公開設定と部屋側の設定反映を比較でき、キー自体は返さない。
