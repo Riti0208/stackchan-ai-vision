@@ -36,6 +36,9 @@ std::atomic<int> wifiDisconnectReason{-1};
 #if FW_STAGE >= 6
 stackchan_fw::Behavior behavior;
 bool cameraPreview = false;
+unsigned facePreviewIndex = 0;
+bool facePreviewActive = false;
+uint32_t facePreviewAt = 0;
 uint32_t behaviorAt = 0, servoAt = 0, faceAt = 0, metricsAt = 0;
 #endif
 
@@ -282,6 +285,12 @@ void loop() {
       case 'X': stackchan_fw::requestWssReconnect(); break;
 #endif
 #if FW_STAGE >= 6
+      case 'F':
+        cameraPreview = false;facePreviewActive = true;facePreviewAt = millis();
+        facePreviewIndex = (facePreviewIndex + 1) % stackchan_fw::expressionCount;
+        stackchan_fw::invalidateFace();
+        Serial.printf("FACE preview=%s duration_ms=3000\n",stackchan_fw::expressionName(static_cast<stackchan_fw::Expression>(facePreviewIndex)));
+        break;
       case 'V':
         cameraPreview = !cameraPreview;
         if (!cameraPreview) stackchan_fw::invalidateFace();
@@ -316,7 +325,8 @@ void loop() {
   }
   if (!cameraPreview && now - faceAt >= 100) {
     faceAt = now;
-    stackchan_fw::drawFace(behavior.expression(), behavior.pan, behavior.tilt);
+    if(facePreviewActive && now-facePreviewAt>=3000) facePreviewActive=false;
+    stackchan_fw::drawFace(facePreviewActive ? static_cast<stackchan_fw::Expression>(facePreviewIndex) : behavior.expression(), behavior.pan, behavior.tilt);
   }
   bool sendFrame = stackchan_fw::frameDue(now);
   if (cameraReady && (cameraPreview || sendFrame)) {

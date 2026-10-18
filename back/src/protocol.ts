@@ -6,7 +6,7 @@ import type { APIDebug } from './api-debug.ts';
 import type { CallMetrics } from './openai.ts';
 import type { APISample, Stage, snapshot } from './telemetry.ts';
 export const actions = ['idle', 'look_at', 'nod', 'shake', 'happy'] as const;
-export const expressions = ['neutral', 'happy', 'sad', 'surprised', 'thinking', 'sleepy', 'love', 'wink'] as const;
+export const expressions = ['neutral', 'happy', 'sad', 'surprised', 'thinking', 'sleepy', 'love', 'wink', 'angry', 'excited', 'embarrassed', 'confused', 'curious', 'relaxed', 'crying', 'tired', 'proud', 'laughing'] as const;
 export const headActions = ['left', 'right', 'up', 'down', 'center', 'resume'] as const;
 export type HeadAction = typeof headActions[number];
 export type HeadResponse = { ok: true; device_id: string; pan: number; tilt: number; seq: number; manual_until: number };
@@ -105,6 +105,7 @@ export type DeviceStatus = {
     wifi_rssi: number | null;
     battery: number | null;
     current_action: Action;
+    face_version?: 1 | 2;
     transport?: {
         upload_rtt_ms: number | null;
     };
@@ -244,7 +245,7 @@ const record = (v: unknown): v is Record<string, unknown> => v !== null && typeo
 const action = (v: unknown): v is Action => typeof v === 'string' && (actions as readonly string[]).includes(v);
 const frame = (v: Record<string, unknown>) => typeof v.stream_id === 'string' && uint(v.frame_id);
 export function isDeviceStatus(v: unknown): v is DeviceStatus {
-    return record(v) && typeof v.online === 'boolean' && finite(v.fps, 0, 1000) && (v.wifi_rssi === null || finite(v.wifi_rssi, -200, 100)) && (v.battery === null || finite(v.battery, 0, 100)) && action(v.current_action) && (v.transport === undefined || (record(v.transport) && (v.transport.upload_rtt_ms === null || finite(v.transport.upload_rtt_ms, 0, 60000))));
+    return record(v) && typeof v.online === 'boolean' && finite(v.fps, 0, 1000) && (v.wifi_rssi === null || finite(v.wifi_rssi, -200, 100)) && (v.battery === null || finite(v.battery, 0, 100)) && action(v.current_action) && (v.face_version === undefined || v.face_version === 1 || v.face_version === 2) && (v.transport === undefined || (record(v.transport) && (v.transport.upload_rtt_ms === null || finite(v.transport.upload_rtt_ms, 0, 60000))));
 }
 export function isDetection(v: unknown): v is Detection {
     if (!record(v) || !frame(v) || !Array.isArray(v.faces) || v.faces.length > 10)

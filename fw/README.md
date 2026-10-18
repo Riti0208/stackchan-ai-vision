@@ -106,3 +106,18 @@ work/behavior-test
 Hardware references:
 - https://docs.m5stack.com/ja/arduino/stackchan/camera
 - https://docs.m5stack.com/en/arduino/stackchan/servo
+
+## Faces (18 total)
+
+Ten new faces: `angry`, `excited`, `embarrassed`, `confused`, `curious`,
+`relaxed`, `crying`, `tired`, `proud`, `laughing`. Large shapes, bold strokes,
+bright colors, shiny eyes, tears, cheeks, stars and a crown make changes visible.
+A 320x240 RGB565 canvas uses 153600 bytes in PSRAM to avoid blank-screen flicker.
+The cached face is redrawn only when its expression or gaze changes.
+Send serial `F` repeatedly to preview all 18 faces, each for three seconds;
+networking and motion continue. It then returns to the server-selected face.
+Following now uses the robot's evaluated emotion instead of a fixed thinking face;
+these expressions do not copy a person's visible expression.
+
+FW reports `device_status.data.face_version: 2` to enable the new faces.
+The backend maps additional faces to supported faces until that notification.

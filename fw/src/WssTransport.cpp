@@ -263,7 +263,7 @@ void networkTask(void*) {
       uint32_t fps=0;const char* action="idle";
 #endif
       int length = snprintf(message, sizeof(message),
-        "{\"type\":\"device_status\",\"timestamp\":%llu,\"data\":{\"online\":true,\"fps\":%.3f,\"wifi_rssi\":%d,\"battery\":null,\"current_action\":\"%s\"}}",
+        "{\"type\":\"device_status\",\"timestamp\":%llu,\"data\":{\"online\":true,\"face_version\":2,\"fps\":%.3f,\"wifi_rssi\":%d,\"battery\":null,\"current_action\":\"%s\"}}",
         timestamp, fps/1000.0, WiFi.RSSI(),action);
       if (length > 0 && static_cast<size_t>(length) < sizeof(message) &&
           socket.sendTXT(message, static_cast<size_t>(length))) {

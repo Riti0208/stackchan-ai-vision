@@ -13,7 +13,7 @@ import { initialHumanActions, scanHumanActions, consumeHumanAction, type HumanAc
 import { choosePersonality, initialEmotion, personalities, isPersonality } from './personality';
 import { callDecisions, callNarration, summarizeCalls, OpenAIError, DECISIONS_MODEL, type APITiming, type CallMetrics } from './openai';
 import { narrationPayload, needsNarration, fallbackNarration, mockNarration } from './narration';
-import { initialMind, planFor, socialContext, mockChoice, type Mind, type Behavior, type Dialogue, type PublicPeer, type Motion, type Personality } from './social';
+import { initialMind, planFor, expressionForEmotion, compatibleExpression, socialContext, mockChoice, type Mind, type Behavior, type Dialogue, type PublicPeer, type Motion, type Personality } from './social';
 import { evaluationPayload, parseEvaluation, mockEvaluation, projectExperiences, emotionKeys, type Emotion, type Experience, type Affect } from './perception';
 interface Env extends ControlledPaidEnv {
   ROOMS: DurableObjectNamespace; ASSETS?: Fetcher; ROOM_CONFIG?: string; SESSION_SECRET?: string;
@@ -390,7 +390,7 @@ export class Room {
     } else if (m.type === 'device_status') {
       const a = m.data;
       if (a.transport?.upload_rtt_ms != null) addSample(d.transport.upload_rtt, a.transport.upload_rtt_ms);
-      p.seen = Date.now(); d.status = { online: true, fps: a.fps, wifi_rssi: a.wifi_rssi, battery: a.battery, current_action: a.current_action };
+      p.seen = Date.now(); d.status = { online: true, fps: a.fps, wifi_rssi: a.wifi_rssi, battery: a.battery, current_action: a.current_action, ...(a.face_version !== undefined ? {face_version:a.face_version} : {}) };
       this.broadcast(d, 'device_status', d.status);
     } else if (m.type === 'heartbeat') {
       p.seen = Date.now(); send(p, 'heartbeat', {});
@@ -446,6 +446,7 @@ export class Room {
   private action(d: Device, action: Action, expression: Motion['expression'], duration_ms: number, display_text = '穏やかな表情で待つ', run?: Pipeline, following = false, manual = false) {
     if (!d.peer || (!manual && Date.now() < (d.manualUntil || 0)) || (!manual && behaviorMode(this.env) === 'follow_person' && !following)) return;
     if (['nod', 'shake', 'happy'].includes(action)) { d.gestureUntil = Date.now() + duration_ms; d.lastGesture = Date.now(); }
+    expression = compatibleExpression(expression, d.status.face_version);
     d.lastHeadAt = Date.now(); d.headSource = manual ? 'manual' : following ? 'follow' : 'autonomous';
     const command = toDeviceMotion({ seq: ++d.seq, action, pan: d.pan, tilt: d.tilt, expression, duration_ms });
     d.actionSentAt.set(command.seq, { sent: performance.now(), frame_at: run?.frame_received_at });
@@ -537,7 +538,7 @@ export class Room {
       if (!target && d.headSource === 'follow') d.headSource = undefined;
       if (target && Date.now() >= (d.manualUntil || 0) && followFresh(d.follow, d.stream, Date.now())) {
         d.pan = target.pan; d.tilt = target.tilt; d.lastFollowAt = Date.now(); trackingIssued = true;
-        this.action(d, 'look_at', 'thinking', 250, mode === 'mock' ? '人物に追従（mock）' : '人物に追従', run, true);
+        this.action(d, 'look_at', expressionForEmotion(next, d.mind.personality), 250, mode === 'mock' ? '人物に追従（mock）' : '人物に追従', run, true);
       }
     }
     const now = Date.now();

@@ -13,13 +13,15 @@ static ActionCommand command(uint32_t seq, Action action, float pan, float tilt,
 }
 
 int main() {
-  for (const char* name : {"sleepy", "love", "wink"}) {
+  for (const char* name : {"neutral","happy","sad","surprised","thinking","sleepy","love","wink","angry","excited","embarrassed","confused","curious","relaxed","crying","tired","proud","laughing"}) {
     Expression expression = Expression::Neutral;
     assert(parseExpression(name, expression));
     assert(std::string(expressionName(expression)) == name);
+    auto c=command(1,Action::Idle,0,0,500,0);c.expression=expression;assert(validCommand(c));
+    Behavior b;assert(b.accept(c,0));assert(b.expression()==expression);
   }
   Expression invalidExpression = Expression::Neutral;
-  assert(!parseExpression("angry", invalidExpression));
+  assert(!parseExpression("not_a_face", invalidExpression));
 
   Behavior b;
   b.idle(0);

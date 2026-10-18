@@ -3,13 +3,32 @@ import type { Experience } from './perception';
 import type { Generation } from './narration';
 import { personalities, type Personality } from './personality.ts';
 export type { Personality } from './personality.ts';
-import type { Intent, Target, Motion, Mind, Behavior, Dialogue } from './protocol.ts';
-export type { Intent, Target, Motion, Mind, Behavior, Dialogue } from './protocol.ts';
+import type { Intent, Target, Motion, Mind, Behavior, Dialogue, Emotion, Expression } from './protocol.ts';
+export type { Intent, Target, Motion, Mind, Behavior, Dialogue, Emotion, Expression } from './protocol.ts';
 export type PublicPeer = { device_id: string; stream_id: string; action: string; expression: string };
 export type Plan = { intent: Intent; target: Target; thought: string; display_text: string; action: Motion['action']; expression: Motion['expression']; pan?: number; tilt?: number; duration_ms: number };
 export const noTarget = (): Target => ({ kind: 'none', device_id: null });
 export function initialMind(id: string, personality: Personality): Mind {
   return { device_id: id, revision: 0, personality, intent: 'observe', target: { kind: 'person', device_id: null }, thought: 'どんな出会いがあるかな。', generation: null, relationships: {}, cause: { kind: 'observation', message_id: null }, valid_until: 0 };
+}
+// Express the robot's own evaluated feelings, rather than copying a person.
+export function expressionForEmotion(e: Emotion, personality: Personality): Expression {
+  if(e.shyness>=.65) return 'embarrassed';
+  if(e.happiness>=.8 && e.excitement>=.8) return 'laughing';
+  if(e.excitement>=.65) return 'excited';
+  if(e.happiness>=.8) return personality==='playful'?'love':'proud';
+  if(e.trust>=.75 && e.happiness>=.55) return 'relaxed';
+  if(e.curiosity>=.55) return 'curious';
+  return 'thinking';
+}
+// Older firmware rejects an entire motion command when its face is unknown.
+export function compatibleExpression(face: Expression, version=1): Expression {
+  if(version>=2 || ['neutral','happy','sad','surprised','thinking','sleepy','love','wink'].includes(face)) return face;
+  if(['excited','proud','laughing'].includes(face)) return 'happy';
+  if(face==='angry' || face==='crying') return 'sad';
+  if(face==='curious' || face==='confused') return 'thinking';
+  if(face==='tired') return 'sleepy';
+  return 'neutral';
 }
 export function planFor(choice: string, personality: Personality): Plan {
   const shy = personalities[personality].restrained;

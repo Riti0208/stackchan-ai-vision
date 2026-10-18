@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialMind, planFor, socialContext, mockChoice } from '../src/social.ts';
+import { initialMind, planFor, expressionForEmotion, compatibleExpression, socialContext, mockChoice } from '../src/social.ts';
 
 test('same visible situation produces different intentions for two personalities', () => {
   const choices = ['observe', 'avert', 'rest', 'greet:other'];
@@ -56,4 +56,16 @@ test('all personalities reach model context with distinct descriptions and safe 
     }
   }
   assert.equal(descriptions.size, 6);
+});
+
+test('follow faces vary with robot emotion',()=>{
+ const base={happiness:.4,curiosity:.4,excitement:.4,shyness:.4,trust:.4};
+ for(const [patch,face] of [[{shyness:.7},'embarrassed'],[{happiness:.9,excitement:.9},'laughing'],[{excitement:.7},'excited'],[{happiness:.9},'proud'],[{trust:.8,happiness:.6},'relaxed'],[{curiosity:.6},'curious'],[{},'thinking']]) assert.equal(expressionForEmotion({...base,...patch},'curious'),face);
+});
+
+test('new expressions preserve neck commands on older firmware',()=>{
+ for(const face of ['angry','excited','embarrassed','confused','curious','relaxed','crying','tired','proud','laughing']) {
+  assert.ok(['neutral','happy','sad','thinking','sleepy'].includes(compatibleExpression(face)));
+  assert.equal(compatibleExpression(face,2),face);
+ }
 });

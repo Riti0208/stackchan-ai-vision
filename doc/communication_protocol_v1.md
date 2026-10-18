@@ -251,7 +251,7 @@ JPEGヘッダーのIDは**そのソケットの現在のstream内**でのみ有�
 | `device_status` | `online`: boolean、`fps`: number 0〜1000、`wifi_rssi`: number -200〜100またはnull、`battery`: number 0〜100またはnull、`current_action`: Action |
 
 - Action = `idle | look_at | nod | shake | happy`。
-- Expression = `neutral | happy | sad | surprised | thinking`。
+- Expression = `neutral | happy | sad | surprised | thinking | sleepy | love | wink | angry | excited | embarrassed | confused | curious | relaxed | crying | tired | proud | laughing`。
 - observationsは8つのnumber 0〜1: `person_present`, `smiling`, `looking_at_robot`, `waving`, `frowning`, `eyes_wide`, `mouth_open`, `tears_visible`。
   加えて`apparent_expression: {label, confidence}`。labelはsmiling / sad_looking / tense_looking / surprised_looking / neutral / unclear、confidenceは0〜1。
 - 初回emotionは性格別の初期値（設計書の表）を使用する。再接続では保存値を復元し、本体ごとに独立する。
@@ -280,6 +280,7 @@ BEはジェスチャー中に次の追跡・ジェスチャー指令を送らな
 追跡中に検出が3秒途絶した場合は追跡を止めidleへ移る。
 FWは通信断でジェスチャーを止め、安全な待機状態へ移る。可動範囲・速度制限はFWの責任。
 
+FWは18表情対応を`device_status.data.face_version: 2`で通知する（省略時は旧8表情）。BEは通知前には新表情を旧表情に変換し、旧FWが首の指令まで拒否することを防ぐ。
 FWは接続直後と以後5秒ごとにdevice_statusを送る。未取得値はnull、未計測FPSは0。
 BEは接続直後の暫定値として`online: true, fps: 0, wifi_rssi: null, battery: null, current_action: idle`を配信可。
 FWからの無通信だけを理由にBEは接続を閉じない。device_statusや画像が15秒以上途絶しても同じstreamで再開できる。onlineはソケット接続状態を示し、稼働確認や映像鮮度の保証ではない。実際のclose/error、同じdevice_idの新接続による置換では従来どおりcleanupする。controllerの15秒heartbeat期限は別に維持する。

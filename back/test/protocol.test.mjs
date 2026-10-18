@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clientRoles, parseClientMessage, parseDeviceServerMessage, serializeClient, serializeServer } from '../src/protocol.ts';
+import { clientRoles, expressions, parseClientMessage, parseDeviceServerMessage, serializeClient, serializeServer } from '../src/protocol.ts';
 const samples = {
   device_status: { online: true, fps: 2, wifi_rssi: null, battery: null, current_action: 'idle', transport: { upload_rtt_ms: 3 } },
   action_ack: { seq: 1, accepted: true }, frame_ack: { stream_id: 's', frame_id: 0xffffffff },
@@ -40,7 +40,7 @@ test('FW accepts bounded commands/session/frame ACK/error and ignores malformed 
   const command = { seq: 1, action: 'nod', pan: -1, tilt: 1, expression: 'neutral', duration_ms: 100 };
   assert.equal(parseDeviceServerMessage(serializeServer('action', command)).type, 'action');
   for (const expression of ['sleepy', 'love', 'wink']) assert.equal(parseDeviceServerMessage(wire('action', { ...command, expression })).type, 'action');
-  for (const patch of [{ seq: 0 }, { seq: -1 }, { pan: 1.01 }, { tilt: -1.01 }, { duration_ms: 99 }, { duration_ms: 3001 }, { duration_ms: 100.5 }, { expression: 'angry' }, { action: 'run' }]) assert.equal(parseDeviceServerMessage(wire('action', { ...command, ...patch })), null);
+  for (const patch of [{ seq: 0 }, { seq: -1 }, { pan: 1.01 }, { tilt: -1.01 }, { duration_ms: 99 }, { duration_ms: 3001 }, { duration_ms: 100.5 }, { expression: 'not_a_face' }, { action: 'run' }]) assert.equal(parseDeviceServerMessage(wire('action', { ...command, ...patch })), null);
   assert.equal(parseDeviceServerMessage(wire('frame_received', { stream_id: 's', frame_id: 0 } )).type, 'frame_received');
   assert.equal(parseDeviceServerMessage(wire('session', { protocol_version: 2, frame_format: 'rgb565le-v2', width: 160, height: 120, room: 'main', device_id: 'robot', role: 'device' })).type, 'session');
   assert.equal(parseDeviceServerMessage(wire('error', { code: 'invalid_message', message: 'invalid_message' })).type, 'error');
@@ -66,4 +66,9 @@ test('communication document client and motor examples match shared runtime vali
 test('device sessions require v2 format and dimensions; legacy or incomplete sessions fail closed',()=>{
  const session={protocol_version:2,frame_format:'rgb565le-v2',width:160,height:120,room:'main',device_id:'robot',role:'device'};
  for(const changed of [{protocol_version:1},{frame_format:'jpeg'},{width:320},{height:240},{frame_format:undefined}])assert.equal(parseDeviceServerMessage(wire('session',{...session,...changed})),null);
+});
+
+test('all 18 display faces are valid FW actions',()=>{
+ assert.equal(expressions.length,18);
+ for(const expression of expressions) assert.ok(parseDeviceServerMessage(wire('action',{seq:1,action:'look_at',pan:0,tilt:0,expression,duration_ms:500})),expression);
 });

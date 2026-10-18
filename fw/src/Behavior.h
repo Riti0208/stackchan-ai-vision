@@ -5,7 +5,8 @@
 #include <cstring>
 namespace stackchan_fw {
 enum class Action : uint8_t { Idle, LookAt, Nod, Shake, Happy };
-enum class Expression : uint8_t { Neutral, Happy, Sad, Surprised, Thinking, Sleepy, Love, Wink };
+enum class Expression : uint8_t { Neutral, Happy, Sad, Surprised, Thinking, Sleepy, Love, Wink, Angry, Excited, Embarrassed, Confused, Curious, Relaxed, Crying, Tired, Proud, Laughing, Count };
+constexpr unsigned expressionCount=static_cast<unsigned>(Expression::Count);
 inline const char* actionName(Action a) {
   static const char* names[]={"idle","look_at","nod","shake","happy"};
   return names[static_cast<unsigned>(a) < 5 ? static_cast<unsigned>(a) : 0];
@@ -15,14 +16,14 @@ inline bool parseAction(const char* s, Action& a) {
   return false;
 }
 inline bool parseExpression(const char* s, Expression& e) {
-  static const char* names[]={"neutral","happy","sad","surprised","thinking","sleepy","love","wink"};
-  for(int i=0;i<8;++i) if(strcmp(s,names[i])==0) { e=static_cast<Expression>(i);return true; }
+  static const char* names[]={"neutral","happy","sad","surprised","thinking","sleepy","love","wink","angry","excited","embarrassed","confused","curious","relaxed","crying","tired","proud","laughing"};
+  for(unsigned i=0;i<expressionCount;++i) if(strcmp(s,names[i])==0) { e=static_cast<Expression>(i);return true; }
   return false;
 }
 inline const char* expressionName(Expression e) {
-  static const char* names[]={"neutral","happy","sad","surprised","thinking","sleepy","love","wink"};
+  static const char* names[]={"neutral","happy","sad","surprised","thinking","sleepy","love","wink","angry","excited","embarrassed","confused","curious","relaxed","crying","tired","proud","laughing"};
   const auto index=static_cast<unsigned>(e);
-  return names[index<8?index:0];
+  return names[index<expressionCount?index:0];
 }
 struct ActionCommand {
   uint32_t seq=0, generation=0, receivedAt=0, duration=500;
@@ -33,7 +34,7 @@ struct ActionCommand {
 inline bool validCommand(const ActionCommand& c) {
   return c.seq>0 && c.duration>=100 && c.duration<=3000 &&
     std::isfinite(c.pan) && std::isfinite(c.tilt) && std::abs(c.pan)<=1 && std::abs(c.tilt)<=1 &&
-    static_cast<unsigned>(c.action)<5 && static_cast<unsigned>(c.expression)<8;
+    static_cast<unsigned>(c.action)<5 && static_cast<unsigned>(c.expression)<expressionCount;
 }
 class Behavior {
  public:
