@@ -192,7 +192,7 @@ FWは次のsessionのversion/format/寸法を検証してから送信する。�
 {"type":"session","timestamp":0,"data":{"protocol_version":2,"role":"device","room":"main","device_id":"stackchan-01","frame_format":"rgb565le-v2","width":160,"height":120}}
 ```
 
-BEがRGB565をJPEG quality 75へ変換する。BE → viewerの形式とDecisions入力は従来形式を維持し、rawを渡さない。
+BEがRGB565をJPEG quality 60へ変換する。BE → viewerの形式とDecisions入力は従来形式を維持し、rawを渡さない。
 
 ```text
 offset 0..3: frame_id (uint32, big-endian)

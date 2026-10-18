@@ -1,5 +1,6 @@
 import { JPEGEncoder } from './vendor/jpeg-encoder.js';
 export const RAW_WIDTH = 160, RAW_HEIGHT = 120;
+export const VIEWER_JPEG_QUALITY = 60;
 export const RAW_HEADER_BYTES = 16, RAW_PACKET_BYTES = RAW_HEADER_BYTES + RAW_WIDTH * RAW_HEIGHT * 2;
 export const RAW_MAX_AGE_MS = 3000;
 export const deviceSession = { protocol_version: 2, frame_format: 'rgb565le-v2', width: RAW_WIDTH, height: RAW_HEIGHT } as const;
@@ -21,13 +22,13 @@ export function encodeRawFrame(frame: RawFrame, byteOrder: RGB565ByteOrder = 'li
   if (frame.pixels.length !== RAW_WIDTH * RAW_HEIGHT * 2) throw new Error('invalid_raw_frame');
   if (byteOrder !== 'little' && byteOrder !== 'big') throw new Error('invalid_rgb565_byte_order');
   const lowByte = byteOrder === 'big' ? 1 : 0, highByte = lowByte ^ 1;
-  encoder ??= new JPEGEncoder(75); rgba ??= new Uint8Array(RAW_WIDTH * RAW_HEIGHT * 4);
+  encoder ??= new JPEGEncoder(VIEWER_JPEG_QUALITY); rgba ??= new Uint8Array(RAW_WIDTH * RAW_HEIGHT * 4);
   for (let i = 0, j = 0; i < frame.pixels.length; i += 2, j += 4) {
     const value = frame.pixels[i + lowByte] | frame.pixels[i + highByte] << 8;
     const r = value >>> 11, g = value >>> 5 & 63, b = value & 31;
     rgba[j] = r << 3 | r >>> 2; rgba[j + 1] = g << 2 | g >>> 4; rgba[j + 2] = b << 3 | b >>> 2; rgba[j + 3] = 255;
   }
-  const jpeg = encoder.encode({ width: RAW_WIDTH, height: RAW_HEIGHT, data: rgba }, 75);
+  const jpeg = encoder.encode({ width: RAW_WIDTH, height: RAW_HEIGHT, data: rgba }, VIEWER_JPEG_QUALITY);
   const packet = new Uint8Array(4 + jpeg.length); new DataView(packet.buffer).setUint32(0, frame.id); packet.set(jpeg, 4);
   return packet;
 }

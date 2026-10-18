@@ -469,7 +469,7 @@ export class RobotConnection {
         let bitmap: ImageBitmap;
         try {
           bitmap = await createImageBitmap(
-            new Blob([item.bytes.slice(4)], { type: "image/jpeg" }),
+            new Blob([new Uint8Array(item.bytes, 4)], { type: "image/jpeg" }),
           );
         } catch {
           this.patch({
@@ -492,8 +492,13 @@ export class RobotConnection {
           this.patch({ notice: "映像キャンバスを初期化できませんでした。" });
           continue;
         }
-        this.canvas.width = bitmap.width;
-        this.canvas.height = bitmap.height;
+        if (
+          this.canvas.width !== bitmap.width ||
+          this.canvas.height !== bitmap.height
+        ) {
+          this.canvas.width = bitmap.width;
+          this.canvas.height = bitmap.height;
+        }
         ctx.drawImage(bitmap, 0, 0);
         this.send({
           type: "frame_ack",
