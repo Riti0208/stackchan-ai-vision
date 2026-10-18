@@ -45,6 +45,8 @@ before(async () => {
   await mkdir('.wrangler', { recursive: true }); fixture = await mkdtemp(resolve('.wrangler/e2e-'));
   const configuration = JSON.parse(await readFile('wrangler.local.jsonc', 'utf8'));
   configuration.main = resolve('src/index.ts'); configuration.assets.directory = resolve('lab'); configuration.name = 'stackchan-e2e'; delete configuration.$schema;
+  // These intention/lease fixtures exercise the explicit 2s evaluation cadence independently of production defaults.
+  configuration.vars.EVAL_INTERVAL_MS = '2000';
   await writeFile(`${fixture}/wrangler.jsonc`, JSON.stringify(configuration));
   const vars = await readFile('.dev.vars.example', 'utf8');
   const match = vars.match(/^ROOM_CONFIG='(.+)'$/m);
