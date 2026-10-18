@@ -5,8 +5,14 @@
 #include <esp_wifi.h>
 #include <atomic>
 #include "secrets.h"
+#include "src/WssTransport.h"
+#if FW_STAGE >= 6
+#include "src/Behavior.h"
+#include "src/Face.h"
+#include "src/Vision.h"
+#endif
 
-// Stage 2: Wi-Fi connection/recovery. WSS is gated until this stage is verified.
+// Stage 2 was verified on hardware; stage 3 adds the authenticated WSS transport.
 constexpr int PAN_LIMIT = 300;    // 0.1 degree units
 constexpr int TILT_CENTER = 450;
 constexpr int TILT_LIMIT = 150;
@@ -24,6 +30,11 @@ bool wifiScanActive = false;
 uint32_t wifiScanAt = 0;
 uint8_t wifiRetriesSinceScan = 0;
 std::atomic<int> wifiDisconnectReason{-1};
+#if FW_STAGE >= 6
+stackchan_fw::Behavior behavior;
+bool cameraPreview = false;
+uint32_t behaviorAt = 0, servoAt = 0, faceAt = 0, metricsAt = 0;
+#endif
 
 const char* wifiReasonName(int reason) {
   switch (reason) {
@@ -152,7 +163,11 @@ void serviceWiFi(uint32_t now) {
                   WiFi.localIP().toString().c_str(), WiFi.RSSI(), wifiConnections);
   } else if (!connected && wifiWasConnected) {
     Serial.println("WIFI disconnected; centering, will reconnect in 10s");
+#if FW_STAGE >= 6
+    behavior.idle(now);
+#else
     moveHead(0, 0);
+#endif
     wifiAttemptAt = now;
   }
   wifiWasConnected = connected;
@@ -203,52 +218,147 @@ void setup() {
   M5StackChan.begin();
   Serial.begin(115200);
   delay(1000);
+#if FW_STAGE >= 6
+  Serial.println("STAGE 6: Decisions backend vision/actions / face default / V=preview / L R U D C / X=reconnect");
+#elif FW_STAGE >= 3
+  Serial.println("STAGE 3: QVGA RGB565 + authenticated WSS / L R U D C / W=scan / X=WS reconnect");
+#else
   Serial.println("STAGE 2 DIAG: QVGA RGB565 + Wi-Fi recovery / L R U D C / W=scan");
+#endif
   if (!psramFound()) {
     Serial.println("FATAL: PSRAM unavailable");
     while (true) delay(1000);
   }
+#if FW_STAGE >= 6
+  M5StackChan.Motion.setAutoAngleSyncEnabled(false);
+  stackchan_fw::initVision();
+  behavior.idle(millis());
+  stackchan_fw::drawFace(stackchan_fw::Expression::Neutral, 0, 0);
+#endif
   moveHead(0, 0);
   cameraReady = startCamera();
   if (!cameraReady) M5.Display.drawString("Camera init failed", 10, 100);
   startWiFi();
+  stackchan_fw::startWssTransport();
   reportAt = millis();
 }
 
 void loop() {
   serviceWiFi(millis());
+  uint32_t now = millis();
+  if (stackchan_fw::takeWssSafetyReset()) {
+#if FW_STAGE >= 6
+    behavior.idle(now);
+#else
+    moveHead(0, 0);
+#endif
+  }
   // No M5StackChan.update(): avoid internal I2C users after SCCB takes ownership.
   while (Serial.available()) {
     char c = toupper(Serial.read());
     switch (c) {
+#if FW_STAGE >= 6
+      case 'L': behavior.manual(-30, behavior.tilt, millis()); break;
+      case 'R': behavior.manual(30, behavior.tilt, millis()); break;
+      case 'U': behavior.manual(behavior.pan, 15, millis()); break;
+      case 'D': behavior.manual(behavior.pan, -15, millis()); break;
+      case 'C': behavior.idle(millis()); break;
+#else
       case 'L': moveHead(-PAN_LIMIT, tilt); break;
       case 'R': moveHead(PAN_LIMIT, tilt); break;
       case 'U': moveHead(pan, TILT_LIMIT); break;
       case 'D': moveHead(pan, -TILT_LIMIT); break;
       case 'C': moveHead(0, 0); break;
+#endif
       case 'W': beginWiFiScan(); break;
+#if FW_STAGE >= 3
+      case 'X': stackchan_fw::requestWssReconnect(); break;
+#endif
+#if FW_STAGE >= 6
+      case 'V': cameraPreview = !cameraPreview; Serial.printf("DISPLAY %s\n", cameraPreview ? "preview" : "face"); break;
+#endif
     }
   }
+#if FW_STAGE >= 6
+  now = millis();
+  if (now - behaviorAt >= 20) {
+    behaviorAt = now;
+    if (stackchan_fw::wssSessionReady()) {
+      stackchan_fw::ActionCommand command;
+      while (stackchan_fw::receiveAction(command)) {
+        if (command.generation == stackchan_fw::wssConnectionCount() &&
+            stackchan_fw::wssSessionReady()) {
+          if (!behavior.accept(command, now)) Serial.println("ACTION expired before application");
+        }
+      }
+    } else {
+      behavior.idle(now);
+    }
+    behavior.update(now);
+    stackchan_fw::reportAction(behavior.action());
+  }
+  if (now - servoAt >= 100) {
+    servoAt = now;
+    int nextPan = constrain(static_cast<int>(lroundf(behavior.pan * 10)), -PAN_LIMIT, PAN_LIMIT);
+    int nextTilt = constrain(static_cast<int>(lroundf(behavior.tilt * 10)), -TILT_LIMIT, TILT_LIMIT);
+    if (nextPan != pan || nextTilt != tilt) moveHead(nextPan, nextTilt);
+  }
+  if (!cameraPreview && now - faceAt >= 100) {
+    faceAt = now;
+    stackchan_fw::drawFace(behavior.expression(), behavior.pan, behavior.tilt);
+  }
+  bool sendFrame = stackchan_fw::frameDue(now);
+  if (cameraReady && (cameraPreview || sendFrame)) {
+#else
   if (cameraReady) {
+#endif
     camera_fb_t* fb = esp_camera_fb_get();
     if (fb) {
       if (fb->format == PIXFORMAT_RGB565 && fb->width == 320 &&
           fb->height == 240 && fb->len >= 320 * 240 * 2) {
+#if FW_STAGE >= 6
+        if (cameraPreview) {
+#endif
         M5.Display.pushImage(0, 0, fb->width, fb->height,
                              reinterpret_cast<uint16_t*>(fb->buf));
         ++frames;
+#if FW_STAGE >= 6
+        }
+        if (sendFrame) stackchan_fw::encodeFrame(fb, now);
+#else
+#endif
       } else Serial.println("CAMERA unexpected frame");
       esp_camera_fb_return(fb);
     } else Serial.println("CAMERA capture failed");
   }
-  uint32_t now = millis();
+#if FW_STAGE >= 6
+  stackchan_fw::adaptVision(now);
+  if (now - metricsAt >= 5000) {
+    metricsAt = now;
+    auto m = stackchan_fw::uploadMetrics();
+    Serial.printf("STAGE6 upload_fps=%.2f sent=%u dropped=%u send_ms=%u action=%s expression=%s heap=%u psram_free=%u\n",
+                  m.fpsMilli / 1000.0f, m.sent, m.dropped, m.lastSendMs,
+                  stackchan_fw::actionName(behavior.action()),
+                  behavior.expression() == stackchan_fw::Expression::Neutral ? "neutral" :
+                  behavior.expression() == stackchan_fw::Expression::Happy ? "happy" :
+                  behavior.expression() == stackchan_fw::Expression::Sad ? "sad" :
+                  behavior.expression() == stackchan_fw::Expression::Surprised ? "surprised" : "thinking",
+                  ESP.getFreeHeap(), ESP.getFreePsram());
+  }
+#endif
+#if FW_STAGE < 6
+  now = millis();
   if (now - reportAt >= 5000) {
-    Serial.printf("STAGE2 frames=%u fps=%.2f heap=%u psram_free=%u wifi=%s rssi=%d\n",
-                  frames, frames * 1000.0 / (now - reportAt),
+    Serial.printf("STAGE%d frames=%u fps=%.2f heap=%u psram_free=%u wifi=%s rssi=%d wss=%s session=%s ws_connections=%u\n",
+                  FW_STAGE, frames, frames * 1000.0 / (now - reportAt),
                   ESP.getFreeHeap(), ESP.getFreePsram(),
                   WiFi.status() == WL_CONNECTED ? "online" : "offline",
-                  WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
+                  WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0,
+                  stackchan_fw::wssConnected() ? "online" : "offline",
+                  stackchan_fw::wssSessionReady() ? "ready" : "waiting",
+                  stackchan_fw::wssConnectionCount());
     frames = 0; reportAt = now;
   }
+#endif
   delay(5);
 }

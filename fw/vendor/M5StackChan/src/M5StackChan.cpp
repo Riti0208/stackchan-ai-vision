@@ -173,6 +173,7 @@ public:
 
     void set_angle_impl(int angle) override
     {
+        angle = uitk_intl::clamp(angle, getAngleLimit().x, getAngleLimit().y);
         int mapped_angle = _zero_pos + angle * 16 / 5 / 10;  // 一步对应 0.3125度, 0.3125 = 5/16
         mapped_angle     = uitk_intl::clamp(mapped_angle, _config.rawPosLimit.x, _config.rawPosLimit.y);
 
@@ -264,7 +265,7 @@ void M5StackChan_Class::servo_init()
     ServoConfig_t yaw_servo_config;
     yaw_servo_config.id                     = 1;
     yaw_servo_config.defaultZeroPos         = 460;
-    yaw_servo_config.angleLimit             = uitk_intl::Vector2i(-1280, 1280);
+    yaw_servo_config.angleLimit             = uitk_intl::Vector2i(-300, 300);
     yaw_servo_config.rawPosLimit            = uitk_intl::Vector2i(0, 1000);
     yaw_servo_config.settingNs              = "servo";
     yaw_servo_config.settingZeroPositionKey = "zero_pos_1";
@@ -273,7 +274,7 @@ void M5StackChan_Class::servo_init()
     ServoConfig_t pitch_servo_config;
     pitch_servo_config.id                     = 2;
     pitch_servo_config.defaultZeroPos         = 620;
-    pitch_servo_config.angleLimit             = uitk_intl::Vector2i(0, 900);
+    pitch_servo_config.angleLimit             = uitk_intl::Vector2i(300, 600);
     pitch_servo_config.rawPosLimit            = uitk_intl::Vector2i(0, 1000);
     pitch_servo_config.settingNs              = "servo";
     pitch_servo_config.settingZeroPositionKey = "zero_pos_2";
