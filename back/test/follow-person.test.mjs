@@ -9,7 +9,7 @@ test('follow adds two coarse choices to the same perception request; autonomous 
  const old=evaluationPayload('data:image/jpeg;base64,fake',{},[],false),follow=evaluationPayload('data:image/jpeg;base64,fake',{},[],false,true);
  assert.equal(old.questions.length,14);assert.equal(follow.questions.length,16);assert.equal(follow.input[0].content.filter(c=>c.type==='input_image').length,1);
  assert.ok(follow.questions.find(q=>q.name==='person_horizontal').instructions.includes('40%-60%'));
- for(const name of ['person_horizontal','person_vertical']) { const instructions=follow.questions.find(q=>q.name===name).instructions; assert.ok(instructions.includes('Do not mirror')); assert.ok(instructions.includes('image left -> pan negative')); assert.ok(instructions.includes('image upper -> tilt positive')); }
+ for(const name of ['person_horizontal','person_vertical']) { const instructions=follow.questions.find(q=>q.name===name).instructions; assert.ok(instructions.includes('Do not mirror or rotate')); assert.ok(instructions.includes('top-left corner as origin')); assert.ok(instructions.includes('bottom-left corner must yield left for horizontal and lower for vertical')); assert.ok(instructions.includes('not bounding boxes or motor angles')); }
  assert.deepEqual(parseEvaluation(body(),true).position,position('right','upper'));
  for(const edit of [b=>b.answers.pop(),b=>b.answers.at(-1).choice='invented',b=>b.answers.at(-1).confidence=NaN,b=>b.answers.push(b.answers.at(-1))]){const b=body();edit(b);assert.throws(()=>parseEvaluation(b,true));}
  assert.equal(parseEvaluation(body()).position,undefined);
@@ -20,6 +20,16 @@ test('coarse steering directions, center hold, per-axis uncertainty and safety c
  assert.equal(coarseTarget(0,0,position('unknown','unknown')),null);assert.deepEqual(coarseTarget(.99,-.99,position('right','lower')),{pan:1,tilt:-1});
  assert.deepEqual(coarseTarget(0,0,{horizontal:{label:'right',confidence:.2},vertical:{label:'upper',confidence:.9}}),{pan:0,tilt:.06});
  assert.equal(coarseTarget(NaN,0,position('right','upper')),null);
+});
+test('all four image quadrants preserve their pan/tilt direction through response parsing',()=>{
+ for(const [x,y,sx,sy] of [['left','lower',-1,-1],['left','upper',-1,1],['right','lower',1,-1],['right','upper',1,1]]){
+  const parsed=parseEvaluation(body(x,y),true),target=coarseTarget(0,0,parsed.position);
+  assert.equal(Math.sign(target.pan),sx);assert.equal(Math.sign(target.tilt),sy);
+ }
+ // Tracking is an incremental correction; a previous right/up target may
+ // remain right/up after one left/down correction, but both values decrease.
+ const target=coarseTarget(.8,.8,position('left','lower'));
+ assert.ok(target.pan<.8&&target.tilt<.8);assert.ok(target.pan>0&&target.tilt>0);
 });
 test('presence permission expires from image receive time and never crosses streams/session deadlines',()=>{
  const gate={stream:'s',order:1,frameAt:1000,until:1000+FOLLOW_MAX_AGE_MS};assert.equal(followFresh(gate,'s',6999),true);assert.equal(followFresh(gate,'s',7000),false);

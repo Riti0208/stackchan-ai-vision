@@ -6,6 +6,7 @@
 #include <atomic>
 #include "secrets.h"
 #include "src/WssTransport.h"
+#include "src/HeadPose.h"
 #if FW_STAGE >= 6
 #include "src/Behavior.h"
 #include "src/Face.h"
@@ -186,10 +187,11 @@ void serviceWiFi(uint32_t now) {
 void moveHead(int requestedPan, int requestedTilt) {
   pan = constrain(requestedPan, -PAN_LIMIT, PAN_LIMIT);
   tilt = constrain(requestedTilt, -TILT_LIMIT, TILT_LIMIT);
-  // Application: negative pan is left; official servo: positive yaw is left.
-  M5StackChan.Motion.move(-pan, TILT_CENTER + tilt, SERVO_SPEED);
+  // Apply the device-verified yaw polarity; pitch retains its working direction.
+  const auto target = stackchan_fw::servoHeadTarget(pan, tilt, TILT_CENTER);
+  M5StackChan.Motion.move(target.yaw, target.pitch, SERVO_SPEED);
   Serial.printf("HEAD pan=%.1f tilt=%.1f yaw=%d pitch=%d speed=%d\n",
-                pan / 10.0, tilt / 10.0, -pan, TILT_CENTER + tilt, SERVO_SPEED);
+                pan / 10.0, tilt / 10.0, target.yaw, target.pitch, SERVO_SPEED);
 }
 
 bool startCamera() {

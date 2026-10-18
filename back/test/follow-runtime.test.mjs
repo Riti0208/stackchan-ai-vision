@@ -41,7 +41,7 @@ test('follow moves before slow social requests without FE, shy avert cannot over
 });
 
 test('Decisions image directions reach FW commands with matching signs without FE',{timeout:16000},async()=>{
- for(const [x,y,pan,tilt] of [['left','center',-.08,0],['right','center',.08,0],['center','upper',0,.06],['center','lower',0,-.06]]){
+ for(const [x,y,pan,tilt] of [['left','center',-.08,0],['right','center',.08,0],['center','upper',0,.06],['center','lower',0,-.06],['left','lower',-.08,-.06]]){
   const h=await harness();h.state.x=x;h.state.y=y;
   try{const d=await h.connect();d.frame(0);const action=await d.wait(m=>m.type==='action');assert.equal(action.data.pan,pan,`image ${x}/${y}: pan`);assert.equal(action.data.tilt,tilt,`image ${x}/${y}: tilt`);}finally{await h.close();}
  }
