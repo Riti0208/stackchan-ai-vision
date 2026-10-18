@@ -32,7 +32,7 @@ test('paid duration defaults to unlimited and null expiry is displayed without r
   let health={ai_mode:'decisions',paid_control:{enabled:true,key_configured:true,room:'main'},paid_session:{active:true,expires_at:null,used_calls:2,max_calls:100}};
   const ui=runInNewContext(monitorJS+`\n({show(h){running=true;currentRoom='main';lastHealth=h;showPaid()},command:paidCommand})`,{
     document:{getElementById:get},window:{addEventListener(){}},setInterval(){},Date,AbortSignal,URLSearchParams,
-    fetch:async(url,init)=>{requests.push({url,...init});return {ok:true,json:async()=>url==='/health'?health:{ok:true}};},
+    fetch:async(url,init)=>{requests.push({url,...init});return {ok:true,json:async()=>url.startsWith('/health')?health:{ok:true}};},
   });
   ui.show(health);
   assert.equal(requests.length,0);
@@ -52,4 +52,16 @@ test('paid duration defaults to unlimited and null expiry is displayed without r
   get('paid-seconds').value='600';get('paid-calls').value='1000';await ui.command('start');
   assert.deepEqual(JSON.parse(requests[0].body),{action:'start',seconds:600,max_calls:1000});
   requests.length=0;await ui.command('stop');assert.deepEqual(JSON.parse(requests[0].body),{action:'stop'});
+});
+
+
+test('updating deployment disables start without sending and keeps stop available',async()=>{
+ const elements=new Map(),requests=[];
+ const get=id=>{if(!elements.has(id))elements.set(id,{addEventListener(){}});return elements.get(id);};
+ let health={deployment:{ready:false},paid_control:{enabled:true,key_configured:true,room:'main'},paid_session:{active:true,expires_at:null,used_calls:2,max_calls:100}};
+ const ui=runInNewContext(monitorJS+`\n({show(h){running=true;currentRoom='main';lastHealth=h;showPaid()},command:paidCommand})`,{document:{getElementById:get},window:{addEventListener(){}},setInterval(){},Date,AbortSignal,URLSearchParams,fetch:async(url,init)=>{requests.push({url,...init});return {ok:true,json:async()=>url.startsWith('/health')?health:{ok:true}};}});
+ ui.show(health);assert.equal(get('paid-start').disabled,true);assert.equal(get('paid-stop').disabled,false);assert.match(get('paid-result').textContent,/更新を反映中/);
+ get('paid-seconds').value='0';get('paid-calls').value='100';await ui.command('start');assert.equal(requests.length,0);
+ await ui.command('stop');assert.deepEqual(JSON.parse(requests[0].body),{action:'stop'});assert.equal(get('paid-start').disabled,true);
+ health={...health,deployment:{ready:true},paid_session:{...health.paid_session,active:false}};ui.show(health);assert.equal(get('paid-start').disabled,false);assert.equal(requests.filter(x=>x.method==='POST').length,1);
 });

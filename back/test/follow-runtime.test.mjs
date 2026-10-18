@@ -9,9 +9,18 @@ const bundle=await build({absWorkingDir:fileURLToPath(new URL('../',import.meta.
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(predicate,ms=7000){const end=Date.now()+ms;while(Date.now()<end){const v=predicate();if(v)return v;await sleep(10);}assert.fail('Local follow/manual condition timed out');}
 function raw(id){const b=new Uint8Array(38416),v=new DataView(b.buffer);b.set([83,67,70,87,2,1]);v.setUint16(6,160);v.setUint16(8,120);v.setUint32(10,id);return b;}
-async function harness({mode='follow_person',mock=false,controlled=false,big=false}={}){
+async function harness({mode='follow_person',mock=false,controlled=false,big=false,versions}={}){
  const state={presence:.9,x:'right',y:'upper',confidence:.95,delay:50,socialDelay:0},requests=[],sockets=[];
- const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-10-17',log:new Log(LogLevel.NONE),durableObjects:{ROOMS:{className:'Room',useSQLite:true}},bindings:{RGB565_BIG_ENDIAN_DEVICES:big?'robot':'',BEHAVIOR_MODE:mode,AI_MODE:mock?'mock':'decisions',ENABLE_PAID_CONTROL:controlled?'true':'false',OPENAI_API_KEY:'fake-only',SESSION_SECRET:'fake-signing',ALLOWED_ORIGIN:origin,ROOM_CONFIG:JSON.stringify({main:{control_token:'fake-control',devices:{robot:'fake-device'},profiles:{robot:'shy'}}}),PAID_SESSION_ID:'follow-test',PAID_SESSION_UNTIL:String(Date.now()+60000),PAID_SESSION_MAX_CALLS:'100',EVAL_INTERVAL_MS:'1000'},outboundService:async request=>{
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:bundle.outputFiles[0].text+`
+export class MixedRoom extends Room {
+ constructor(ctx,env){super(ctx,env);this.testEnv=env;}
+ async fetch(req){
+  const r=await super.fetch(req),path=new URL(req.url).pathname;
+  if(path==='/paid-budget'&&this.testEnv.TEST_BUDGET_VERSION){const headers=new Headers(r.headers);headers.set('X-Stackchan-Version',this.testEnv.TEST_BUDGET_VERSION);return new Response(r.body,{status:r.status,headers});}
+  if(path==='/list'&&this.testEnv.TEST_ROOM_VERSION){const data=await r.json();data.runtime.version=this.testEnv.TEST_ROOM_VERSION;return Response.json(data);}
+  return r;
+ }
+}`,compatibilityDate:'2026-10-17',log:new Log(LogLevel.NONE),durableObjects:{ROOMS:{className:'MixedRoom',useSQLite:true}},bindings:{TEST_ROOM_VERSION:versions?.room||'',TEST_BUDGET_VERSION:versions?.budget||'',RGB565_BIG_ENDIAN_DEVICES:big?'robot':'',BEHAVIOR_MODE:mode,AI_MODE:mock?'mock':'decisions',ENABLE_PAID_CONTROL:controlled?'true':'false',OPENAI_API_KEY:'fake-only',SESSION_SECRET:'fake-signing',ALLOWED_ORIGIN:origin,ROOM_CONFIG:JSON.stringify({main:{control_token:'fake-control',devices:{robot:'fake-device'},profiles:{robot:'shy'}}}),PAID_SESSION_ID:'follow-test',PAID_SESSION_UNTIL:String(Date.now()+60000),PAID_SESSION_MAX_CALLS:'100',EVAL_INTERVAL_MS:'1000'},outboundService:async request=>{
   assert.ok(['https://api.openai.com/v1/decisions','https://api.openai.com/v1/responses'].includes(request.url));
   const b=await request.json(),perception=b.questions?.[0]?.type==='predicate';requests.push({stage:perception?'perception':b.questions?'intention':'narration',questions:b.questions?.map(q=>q.name)});
   if(perception){const c={...state};await sleep(c.delay);return Response.json({answers:b.questions.map(q=>q.type==='predicate'?{name:q.name,type:q.type,probability:q.name==='person_present'?c.presence:.9}:q.type==='score'?{name:q.name,type:q.type,score:2,confidence:.9}:{name:q.name,type:q.type,choice:q.name==='person_horizontal'?c.x:q.name==='person_vertical'?c.y:'neutral',confidence:c.confidence}),usage:{input_tokens:10,output_tokens:0}});}
@@ -99,4 +108,17 @@ test('configured byte-order override reaches the real Worker encoder and telemet
   if(reference)assert.deepEqual(jpeg,reference);else reference=jpeg;
   v.send('telemetry_request',{});const t=(await v.wait(m=>m.type==='telemetry_snapshot')).data.transport;assert.equal(t.input_byte_order,big?'big':'little');assert.equal(t.byte_order_override,big);
  }finally{await h.close();}}
+});
+
+
+test('mixed deployments report updating and reject start without a grant; stop remains available',{timeout:12000},async()=>{
+ for(const versions of [{room:'old',budget:'local'},{room:'local',budget:'old'}]){
+  const h=await harness({controlled:true,mock:true,versions});
+  try{
+   const before=await h.health();assert.equal(before.deployment.ready,false);assert.equal(before.deployment.worker_version,'local');
+   const start=await h.control({action:'start',seconds:0,max_calls:100});assert.equal(start.status,503);assert.equal((await start.json()).error.code,'deployment_updating');
+   assert.equal((await h.health()).paid_session.reason,'not_started');assert.equal(h.requests.length,0);
+   assert.equal((await h.control({action:'stop'})).status,200);assert.equal((await h.health()).paid_session.reason,'stopped');
+  }finally{await h.close();}
+ }
 });

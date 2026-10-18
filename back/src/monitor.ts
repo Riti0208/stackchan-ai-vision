@@ -196,25 +196,26 @@ function attach(id, ownGeneration) {
 }
 function showPaid() {
   const h=lastHealth;if(!h)return;
-  const control=h.paid_control, budget=h.paid_session;
+  const control=h.paid_control, budget=h.paid_session, updating=h.deployment?.ready===false;
   $('paid-control').hidden=!running || !control?.enabled || currentRoom!==control.room;
-  $('paid-start').disabled=paidBusy || budget.active || !control?.key_configured;
+  $('paid-start').disabled=paidBusy || updating || budget.active || !control?.key_configured;
   $('paid-stop').disabled=paidBusy || !budget.active;
   $('paid-seconds').disabled=paidBusy || budget.active; $('paid-calls').disabled=paidBusy || budget.active;
-  $('paid-result').textContent=paidError || (!control?.key_configured?'OpenAI APIキーが未設定です。':budget.active?'実APIが有効です。'+(budget.expires_at===null?'時間無制限':'残り '+Math.max(0,Math.ceil((budget.expires_at-Date.now())/1000))+' 秒')+' / '+budget.used_calls+' / '+budget.max_calls+' 回':'実APIは停止中です（'+(budget.reason||'停止')+'）。');
+  $('paid-result').textContent=paidError || (updating?'更新を反映中です。完了すると開始ボタンが使えるようになります。停止操作は引き続き使えます。':!control?.key_configured?'OpenAI APIキーが未設定です。':budget.active?'実APIが有効です。'+(budget.expires_at===null?'時間無制限':'残り '+Math.max(0,Math.ceil((budget.expires_at-Date.now())/1000))+' 秒')+' / '+budget.used_calls+' / '+budget.max_calls+' 回':'実APIは停止中です（'+(budget.reason||'停止')+'）。');
 }
-async function health(){const r=await fetch('/health',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error('ヘルスチェック失敗');const h=await r.json();lastHealth=h;$('health').textContent='AI: '+h.ai_mode+' / 動作: '+(h.behavior_mode==='follow_person'?'人物追従':h.behavior_mode==='autonomous'?'自由判断':'不明')+' / 実APIセッション: '+(h.paid_session.active?'有効':'停止')+' / 使用回数: '+h.paid_session.used_calls+' / '+h.paid_session.max_calls;showPaid();}
+async function health(){const r=await fetch('/health?'+new URLSearchParams({room:currentRoom}),{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error('ヘルスチェック失敗');const h=await r.json();if(lastHealth?.deployment?.ready===false&&h.deployment?.ready===true)paidError='';lastHealth=h;$('health').textContent='AI: '+h.ai_mode+' / 動作: '+(h.behavior_mode==='follow_person'?'人物追従':h.behavior_mode==='autonomous'?'自由判断':'不明')+' / 実APIセッション: '+(h.paid_session.active?'有効':'停止')+' / 使用回数: '+h.paid_session.used_calls+' / '+h.paid_session.max_calls;showPaid();}
 async function paidCommand(action) {
   if(paidBusy || !running)return;
+  if(action==='start'&&lastHealth?.deployment?.ready===false){showPaid();return;}
   const seconds=Number($('paid-seconds').value), max_calls=Number($('paid-calls').value);
   if(action==='start' && (!Number.isInteger(seconds)||seconds<0||seconds>600||!Number.isInteger(max_calls)||max_calls<1||max_calls>1000)){$('paid-result').textContent='時間は0〜600秒（0=時間無制限）、上限は1〜1000回の整数で指定してください。';return;}
   paidError='';paidBusy=true;showPaid();
   try {
     const r=await fetch('/api/control/paid-session?'+new URLSearchParams({room:currentRoom}),{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json'},body:JSON.stringify(action==='start'?{action,seconds,max_calls}:{action})});
-    if(!r.ok){const e=await r.json();throw new Error('切り替えに失敗しました: '+e.error?.code);}
+    if(!r.ok){const e=await r.json();if(e.error?.code==='deployment_updating'){if(lastHealth)lastHealth.deployment={...lastHealth.deployment,ready:false};throw new Error('更新を反映中です。完了後にもう一度開始してください。');}throw new Error('切り替えに失敗しました: '+e.error?.code);}
     event(currentRoom,action==='start'?'実APIを開始':'実APIを停止');await health();
   }catch(error){paidError=error.message;$('paid-result').textContent=paidError;}
-  finally {paidBusy=false; if(lastHealth){$('paid-start').disabled=lastHealth.paid_session.active || !lastHealth.paid_control?.key_configured;$('paid-stop').disabled=!lastHealth.paid_session.active;}}
+  finally {paidBusy=false;showPaid();}
 }
 $('paid-start').addEventListener('click',()=>paidCommand('start'));
 $('paid-stop').addEventListener('click',()=>paidCommand('stop'));

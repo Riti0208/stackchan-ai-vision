@@ -1,3 +1,4 @@
+import { deploymentStatus } from './deployment.ts';
 import { behaviorMode, manualTarget, coarseTarget, followFresh, FOLLOW_MAX_AGE_MS, type FollowGate } from './follow-person.ts';
 import { APIDebugCache, type APIDebug } from './api-debug.ts';
 import { parseRawFrame, encodeRawFrame, LatestFrames, RAW_PACKET_BYTES, RAW_MAX_AGE_MS, deviceSession, type RawFrame } from './raw-frame';
@@ -65,6 +66,14 @@ async function session(req: Request, room: string, env: Env): Promise<{ sid: str
     return value.room === room && value.expires > Date.now() && typeof value.sid === 'string' ? value : null;
   } catch { return null; }
 }
+async function deployment(env: Env, room: string, budgetVersion?: string | null) {
+  const worker = env.VERSION_METADATA?.id || 'local';
+  const [roomVersion, paidVersion] = await Promise.all([
+    env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(`https://room.internal/list?room=${room}`).then(async r => r.ok ? ((await r.json()) as { runtime?: { version?: string } }).runtime?.version || (worker === 'local' ? 'local' : null) : null).catch(() => null),
+    budgetVersion === undefined ? env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget').then(r => r.headers.get('X-Stackchan-Version')).catch(() => null) : Promise.resolve(budgetVersion)
+  ]);
+  return deploymentStatus(worker, roomVersion, paidVersion);
+}
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -77,9 +86,13 @@ export default {
       } });
     }
     if (url.pathname === '/health') {
-      const state: BudgetStatus = env.ENABLE_PAID_CONTROL === 'true' || env.AI_MODE === 'decisions' ? await (await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : paidSession(env);
+      const budgetResponse = env.ENABLE_PAID_CONTROL === 'true' || env.AI_MODE === 'decisions' ? await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget') : null;
+      const state: BudgetStatus = budgetResponse ? await budgetResponse.json() : paidSession(env);
+      const requestedRoom = url.searchParams.get('room') || env.PAID_CONTROL_ROOM || 'main';
+      const registered = config(env);
+      const readiness = Object.hasOwn(registered, requestedRoom) ? await deployment(env, requestedRoom, budgetResponse?.headers.get('X-Stackchan-Version') ?? null) : null;
       const mode = env.ENABLE_PAID_CONTROL === 'true' ? state.active ? 'decisions' : 'mock' : env.AI_MODE || 'mock';
-      return json({ paid_session: state, paid_control: { enabled: env.ENABLE_PAID_CONTROL === 'true', key_configured: !!env.OPENAI_API_KEY?.trim(), room: env.PAID_CONTROL_ROOM || 'main' }, ok: true, behavior_mode: behaviorMode(env), ai_mode: mode, protocol_version: 1, device_protocol_version: 2, ai_model: mode === 'decisions' ? DECISIONS_MODEL : null, narration_model: mode === 'decisions' ? DECISIONS_MODEL : null, ai_configured: mode !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
+      return json({ deployment: readiness, paid_session: state, paid_control: { enabled: env.ENABLE_PAID_CONTROL === 'true', key_configured: !!env.OPENAI_API_KEY?.trim(), room: env.PAID_CONTROL_ROOM || 'main' }, ok: true, behavior_mode: behaviorMode(env), ai_mode: mode, protocol_version: 1, device_protocol_version: 2, ai_model: mode === 'decisions' ? DECISIONS_MODEL : null, narration_model: mode === 'decisions' ? DECISIONS_MODEL : null, ai_configured: mode !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
     }
     if (url.pathname === '/' || url.pathname.startsWith('/lab')) {
       if (!env.ASSETS || (url.pathname.startsWith('/lab') && env.ENABLE_LAB !== 'true')) return fail(404, 'not_found');
@@ -122,7 +135,8 @@ export default {
       const body = await req.text(); if (new TextEncoder().encode(body).length > 1024) return fail(413, 'invalid_request');
       let command: any; try { command = JSON.parse(body); } catch { return fail(400, 'invalid_request'); }
       if (!command || !['start','stop'].includes(command.action) || Object.keys(command).some(k => !['action','seconds','max_calls'].includes(k))) return fail(400, 'invalid_request');
-      const response = await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-control', { method: 'POST', body: JSON.stringify(command) });
+      if (command.action === 'start' && !(await deployment(env, room)).ready) return json({ error: { code: 'deployment_updating', message: '更新を反映中です。開始できるようになるまでお待ちください。' } }, 503, { 'Retry-After': '5' });
+      const response = await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-control', { method: 'POST', headers: { 'X-Expected-Version': env.VERSION_METADATA?.id || 'local' }, body: JSON.stringify(command) });
       if (response.ok) await Promise.allSettled(Object.keys(config(env)).map(name => env.ROOMS.get(env.ROOMS.idFromName(name)).fetch('https://room.internal/paid-state-changed', { method: 'POST' })));
       return response;
     }
@@ -230,10 +244,13 @@ export class Room {
     const url = new URL(req.url), room = url.searchParams.get('room')!;
     if (url.pathname === '/paid-budget') return json(this.env.ENABLE_PAID_CONTROL === 'true'
       ? await controlledBudget(this.ctx.storage, this.env, req.method === 'POST', url.searchParams.get('session_id') || undefined)
-      : await reservePaidCall(this.ctx.storage, this.env, req.method === 'POST'));
+      : await reservePaidCall(this.ctx.storage, this.env, req.method === 'POST'), 200, { 'X-Stackchan-Version': this.env.VERSION_METADATA?.id || 'local' });
     if (url.pathname === '/paid-control' && req.method === 'POST') {
       try {
-        const state = await updatePaidSession(this.ctx.storage, this.env, await req.json());
+        const command = await req.json() as Parameters<typeof updatePaidSession>[2];
+        const expected = req.headers.get('X-Expected-Version');
+        if (command.action === 'start' && expected && expected !== (this.env.VERSION_METADATA?.id || 'local')) return fail(503, 'deployment_updating');
+        const state = await updatePaidSession(this.ctx.storage, this.env, command);
         console.log({ event: 'paid_session_control', active: state.active, reason: state.reason, expires_at: state.expires_at, max_calls: state.max_calls, used_calls: state.used_calls });
         return json(state);
       } catch (error) { const code = error instanceof Error ? error.message : 'control_failed'; return fail(code === 'already_active' ? 409 : code === 'key_not_configured' ? 503 : code === 'control_disabled' ? 403 : 400, code); }
