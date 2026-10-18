@@ -32,7 +32,7 @@ uint32_t lastStatusAt = 0;
 bool statusSent = false;
 uint32_t lastAcceptedSeq = 0; // Reset for each WS generation; action handling is stage 6.
 #if FW_STAGE >= 6
-constexpr size_t packetCapacity=96*1024+4;
+constexpr size_t packetCapacity=16+160*120*2;
 struct FrameSlot { uint8_t* data=nullptr; size_t length=0; uint32_t generation=0,capturedAt=0; int state=0; };
 FrameSlot slots[3];
 int pending=-1;
@@ -57,7 +57,7 @@ void sendPendingFrame() {
   if(!sessionReady.load() || frame.generation!=connections.load() || millis()-frame.capturedAt>1000) {
     droppedFrames.fetch_add(1);
   } else {
-    frame.data[0]=nextFrameId>>24;frame.data[1]=nextFrameId>>16;frame.data[2]=nextFrameId>>8;frame.data[3]=nextFrameId;
+    frame.data[10]=nextFrameId>>24;frame.data[11]=nextFrameId>>16;frame.data[12]=nextFrameId>>8;frame.data[13]=nextFrameId;
     uint32_t started=millis();
     bool ok=socket.sendBIN(frame.data,frame.length);
     lastSendMs.store(millis()-started);
@@ -117,14 +117,16 @@ void onSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       const char* room = doc["data"]["room"] | "";
       const char* device = doc["data"]["device_id"] | "";
       if (!doc["data"]["protocol_version"].is<int>() ||
-          doc["data"]["protocol_version"].as<int>() != 1 || strcmp(role, "device") != 0 ||
+          doc["data"]["protocol_version"].as<int>() != 2 || strcmp(role, "device") != 0 ||
+          strcmp(doc["data"]["frame_format"] | "", "rgb565le-v2") != 0 ||
+          doc["data"]["width"].as<int>() != 160 || doc["data"]["height"].as<int>() != 120 ||
           config.room != room || config.device != device) {
         Serial.println("WSS session mismatch; closing connection");
         closeSocket();
         return;
       }
       sessionReady.store(true);
-      Serial.println("WSS session OK protocol=1 role=device");
+      Serial.println("WSS session OK protocol=2 role=device format=rgb565le-v2 size=160x120");
     } else if (strcmp(messageType, "action") == 0) {
 #if FW_STAGE >= 6
       auto data=doc["data"];
@@ -295,14 +297,16 @@ void discardFrame(FrameLease& lease) {
   portENTER_CRITICAL(&frameLock);slots[lease.slot].state=0;portEXIT_CRITICAL(&frameLock);
   lease.slot=-1;droppedFrames.fetch_add(1);
 }
-void publishFrame(FrameLease& lease,size_t jpegLength,uint32_t generation,uint32_t capturedAt) {
+void publishFrame(FrameLease& lease,size_t packetLength,uint32_t generation,uint32_t capturedAt) {
   if(lease.slot<0) return;
-  if(jpegLength<4 || jpegLength>lease.capacity-4 || lease.data[4]!=0xff || lease.data[5]!=0xd8 ||
-     lease.data[jpegLength+2]!=0xff || lease.data[jpegLength+3]!=0xd9 ||
+  if(packetLength!=16+160*120*2 || packetLength>lease.capacity ||
+     lease.data[0]!='S' || lease.data[1]!='C' || lease.data[2]!='F' || lease.data[3]!='W' ||
+     lease.data[4]!=2 || lease.data[5]!=1 || lease.data[6]!=0 || lease.data[7]!=160 ||
+     lease.data[8]!=0 || lease.data[9]!=120 || lease.data[14]!=0 || lease.data[15]!=0 ||
      !wssSessionReady() || generation!=connections.load()) {discardFrame(lease);return;}
   portENTER_CRITICAL(&frameLock);
   if(pending>=0) {slots[pending].state=0;droppedFrames.fetch_add(1);}
-  auto& frame=slots[lease.slot];frame.length=jpegLength+4;frame.generation=generation;
+  auto& frame=slots[lease.slot];frame.length=packetLength;frame.generation=generation;
   frame.capturedAt=capturedAt;frame.state=2;pending=lease.slot;
   portEXIT_CRITICAL(&frameLock);
   lease.slot=-1;

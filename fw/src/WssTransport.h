@@ -17,7 +17,7 @@ void requestWssReconnect();
 struct FrameLease { uint8_t* data=nullptr; size_t capacity=0; int slot=-1; };
 struct UploadMetrics { uint32_t sent=0,dropped=0,lastSendMs=0,fpsMilli=0; };
 FrameLease acquireFrame();
-void publishFrame(FrameLease& lease,size_t jpegLength,uint32_t generation,uint32_t capturedAt);
+void publishFrame(FrameLease& lease,size_t packetLength,uint32_t generation,uint32_t capturedAt);
 void discardFrame(FrameLease& lease);
 bool receiveAction(ActionCommand& command);
 void reportAction(Action action);

@@ -62,14 +62,14 @@ class Behavior {
     if(gesture) {
       float phase=6.28318530718f*(now-gestureAt)/gestureDuration;
       p=gesturePan;t=gestureTilt;
-      if(gestureAction==Action::Nod) t+=10*std::sin(phase);
-      if(gestureAction==Action::Shake) p+=15*std::sin(phase);
-      if(gestureAction==Action::Happy) {p+=8*std::sin(phase);t+=7*std::sin(2*phase);}
+      if(gestureAction==Action::Nod) t+=12*std::sin(phase);
+      if(gestureAction==Action::Shake) p+=20*std::sin(phase);
+      if(gestureAction==Action::Happy) {p+=10*std::sin(phase);t+=8*std::sin(2*phase);}
     }
-    // Limit target rate even after a long main-loop delay: pan 30deg/s, tilt 20deg/s.
+    // Keep movement smooth but responsive: pan 50deg/s, tilt 35deg/s.
     float dt=std::min<uint32_t>(elapsed,100)/1000.0f;
-    pan+=std::clamp(std::clamp(p,-30.0f,30.0f)-pan,-30*dt,30*dt);
-    tilt+=std::clamp(std::clamp(t,-15.0f,15.0f)-tilt,-20*dt,20*dt);
+    pan+=std::clamp(std::clamp(p,-30.0f,30.0f)-pan,-50*dt,50*dt);
+    tilt+=std::clamp(std::clamp(t,-15.0f,15.0f)-tilt,-35*dt,35*dt);
   }
   float pan=0,tilt=0;
   Action action() const {return gesture?gestureAction:baseAction;}

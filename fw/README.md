@@ -1,23 +1,25 @@
 # StackChan CoreS3 firmware
 
-The full firmware sends camera JPEGs to the StackChan backend over authenticated
-WSS. The backend uses OpenAI Decisions API for image observations and action
+The full firmware sends raw RGB565LE camera frames to the StackChan backend over authenticated
+WSS. The backend converts each frame to JPEG for the existing viewer and OpenAI Decisions API image observations and action
 selection; the ESP32 does not contain an OpenAI API key. It receives validated
 actions, moves the neck within small limits, and draws the selected expression.
 
 ## What the firmware does
 
-- Captures the GC0308 camera at QVGA RGB565, converts frames to JPEG in PSRAM,
-  and targets 320x240 at 60 fps with a 32-bit big-endian frame ID.
-- Actual upload FPS depends on camera capture, JPEG encoding, and Wi-Fi; the
+- Captures the GC0308 camera at QQVGA 160x120 RGB565 and sends the framebuffer
+  without JPEG encoding using the `SCFW` v2 raw-frame packet and 32-bit
+  big-endian frame ID.
+- Upload FPS depends on capture, the 38,400-byte raw transfer, and Wi-Fi; the
   serial `upload_fps` field reports the measured rate.
 - Keeps only the newest unsent frame. Frames older than one second or from an
-  earlier connection are discarded. Sustained pressure lowers JPEG quality,
-  then falls back to 1 fps, then lowers resolution.
+  earlier connection are discarded. The target is capped at 60 fps; actual
+  delivery may be lower when the camera or network cannot keep up.
 - Sends `device_status` every five seconds with measured upload FPS, Wi-Fi RSSI,
   and current action. Battery is `null` because the camera owns the shared I2C bus.
 - Accepts newer action sequence numbers only. Pan is limited to ±30 degrees,
-  tilt to ±15 degrees around neutral, and movement speed is limited in firmware.
+  tilt to ±15 degrees around neutral; tracking and gestures use a faster,
+  responsive movement curve while staying inside those limits.
   Gestures finish before the head returns to the latest tracking target.
 - Draws neutral/happy/sad/surprised/thinking faces. Press `V` in the serial
   monitor to toggle the camera preview; the default screen shows the face.
@@ -63,11 +65,12 @@ press Return in the serial monitor.
 
 ## Backend behavior
 
-The WSS endpoint must send a protocol-version-1 device session containing the
-configured room and `device_id`. The firmware sends status after session setup
-and every five seconds, matching the backend's liveness timeout. It uploads
-binary messages as `[uint32 big-endian frame_id][JPEG]` and validates action
-fields/ranges before queueing them. `action_ack` means the action was accepted
+The WSS endpoint must send a protocol-version-2 device session declaring
+`rgb565le-v2`, 160x120. Viewer/controller sessions remain protocol version 1.
+The firmware sends status after session setup and every five seconds. Uploads
+use a 16-byte `SCFW` header followed by 160x120 RGB565LE pixels; the backend
+validates and converts the frame to JPEG before forwarding it to viewers or AI.
+The firmware validates action fields/ranges before queueing them. `action_ack` means the action was accepted
 for scheduling, not that the physical movement has completed.
 
 The existing backend uses OpenAI Decisions API (`gpt-6-luna`) for image

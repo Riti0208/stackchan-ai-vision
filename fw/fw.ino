@@ -16,7 +16,7 @@
 constexpr int PAN_LIMIT = 300;    // 0.1 degree units
 constexpr int TILT_CENTER = 450;
 constexpr int TILT_LIMIT = 150;
-constexpr int SERVO_SPEED = 200; // Official Motion scale: 0..1000
+constexpr int SERVO_SPEED = 350; // Official Motion scale: 0..1000
 bool cameraReady = false;
 uint32_t frames = 0;
 uint32_t reportAt = 0;
@@ -201,7 +201,7 @@ bool startCamera() {
   c.pin_vsync = 46; c.pin_href = 38; c.pin_pclk = 45;
   c.xclk_freq_hz = 20000000;
   c.ledc_timer = LEDC_TIMER_0; c.ledc_channel = LEDC_CHANNEL_0;
-  c.pixel_format = PIXFORMAT_RGB565; c.frame_size = FRAMESIZE_QVGA;
+  c.pixel_format = PIXFORMAT_RGB565; c.frame_size = FRAMESIZE_QQVGA;
   c.jpeg_quality = 0; c.fb_count = 2;
   c.fb_location = CAMERA_FB_IN_PSRAM;
   c.grab_mode = CAMERA_GRAB_LATEST;
@@ -318,8 +318,8 @@ void loop() {
 #endif
     camera_fb_t* fb = esp_camera_fb_get();
     if (fb) {
-      if (fb->format == PIXFORMAT_RGB565 && fb->width == 320 &&
-          fb->height == 240 && fb->len >= 320 * 240 * 2) {
+      if (fb->format == PIXFORMAT_RGB565 && fb->width == 160 &&
+          fb->height == 120 && fb->len >= 160 * 120 * 2) {
 #if FW_STAGE >= 6
         if (cameraPreview) {
 #endif
