@@ -1,3 +1,5 @@
+import { monitorHTML, monitorJS } from './monitor';
+import { logConnection, logRun, logTransport } from './observability';
 import { serializeServer, parseClientMessage, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
 import { paidSession, reservePaidCall, guardedFetch, type PaidEnv } from './paid-session';
 import { newHistory, newTransport, recordRun, receiveFrame, addSample, pacing, snapshot, type History, type Transport, type Pipeline, type Stage } from './telemetry';
@@ -13,7 +15,7 @@ interface Env extends PaidEnv {
 }
 type Config = Record<string, { control_token: string; devices: Record<string, string>; profiles?: Record<string, Personality> }>;
 type Action = ServerData['action']['action'];
-type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; pending: Set<number>; sentAt: Map<number, number>; lastMetricsRequest?: number };
+type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; pending: Set<number>; sentAt: Map<number, number>; lastMetricsRequest?: number; monitor?: boolean };
 type Device = {
   id: string; room: string; mind: Mind; behavior?: Behavior; inbox: Dialogue[]; experienced: Set<string>; greeted: Set<string>; publicHistory: Dialogue[];
   peer?: Peer; stream: string | null; viewers: Set<Peer>; controller?: Peer;
@@ -21,7 +23,7 @@ type Device = {
   order: number; frames: Map<number, { order: number; at: number }>; detectedOrder: number;
   retryAt: number; lastDecision: number; lastAI: number; busy: boolean; gestureUntil: number; lastDetection: number; lastGesture: number;
   lastTextAt: number; textRetryAt: number; textEmotion?: Emotion;
-  metrics: History; transport: Transport; lastTelemetry: number; actionSentAt: Map<number, { sent: number; frame_at?: number }>; human: HumanActionState; lastChoice?: string; affectiveHistory: Experience[]; firstJoinAt: number | null; totalExperiences: number;
+  metrics: History; transport: Transport; lastTelemetry: number; lastTransportLog?: number; actionSentAt: Map<number, { sent: number; frame_at?: number }>; human: HumanActionState; lastChoice?: string; affectiveHistory: Experience[]; firstJoinAt: number | null; totalExperiences: number;
   latest?: { bytes: ArrayBuffer; id: number; order: number; at: number };
 };
 type Identity = { human?: HumanActionState; version: 1; firstJoinAt: number; updatedAt: number; totalExperiences: number; mind: Mind; emotion: Emotion; affectiveHistory: Experience[]; publicHistory: Dialogue[]; experienced: string[] };
@@ -60,6 +62,14 @@ async function session(req: Request, room: string, env: Env): Promise<{ sid: str
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === '/monitor' || url.pathname === '/monitor/app.js') {
+      const script = url.pathname.endsWith('.js');
+      return new Response(script ? monitorJS : monitorHTML, { headers: {
+        'Content-Type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+      } });
+    }
     if (url.pathname === '/health') return json({ paid_session: env.AI_MODE === 'decisions' ? await (await env.ROOMS.get(env.ROOMS.idFromName('__paid_budget__')).fetch('https://room.internal/paid-budget')).json() : paidSession(env), ok: true, ai_mode: env.AI_MODE || 'mock', protocol_version: 1, ai_model: env.AI_MODE === 'decisions' ? DECISIONS_MODEL : null, narration_model: env.AI_MODE === 'decisions' ? DECISIONS_MODEL : null, ai_configured: env.AI_MODE !== 'decisions' || !!env.OPENAI_API_KEY?.trim(), pacing: pacing(env) });
     if (url.pathname === '/' || url.pathname.startsWith('/lab')) {
       if (!env.ASSETS || (url.pathname.startsWith('/lab') && env.ENABLE_LAB !== 'true')) return fail(404, 'not_found');
@@ -84,7 +94,7 @@ export default {
       room = list[1]; if (!ident.test(room) || !config(env)[room]) return fail(404, 'not_found');
       return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(`https://room.internal/list?room=${room}`);
     }
-    if (!['/ws/device', '/ws/viewer'].includes(url.pathname) || req.method !== 'GET') {
+    if (!['/ws/device', '/ws/viewer', '/ws/monitor'].includes(url.pathname) || req.method !== 'GET') {
       if (env.ASSETS && !url.pathname.startsWith('/api/') && !url.pathname.startsWith('/ws/')) return env.ASSETS.fetch(req);
       return fail(404, 'not_found');
     }
@@ -100,13 +110,13 @@ export default {
       role = 'device';
     } else {
       if (req.headers.get('Origin') !== env.ALLOWED_ORIGIN) return fail(403, 'forbidden');
-      if (url.searchParams.get('control') === '1') {
-        auth = await session(req, room, env); if (!auth) return fail(401, 'unauthorized'); role = 'controller';
+      if (url.pathname === '/ws/monitor' || url.searchParams.get('control') === '1') {
+        auth = await session(req, room, env); if (!auth) return fail(401, 'unauthorized'); role = url.pathname === '/ws/monitor' ? 'viewer' : 'controller';
       }
     }
     // DO is not exposed directly; overwrite any client-supplied internal headers.
     const headers = new Headers(req.headers);
-    headers.set('X-Role', role); headers.set('X-Sid', auth?.sid || ''); headers.set('X-Expires', String(auth?.expires || 0));
+    headers.set('X-Monitor', String(url.pathname === '/ws/monitor')); headers.set('X-Role', role); headers.set('X-Sid', auth?.sid || ''); headers.set('X-Expires', String(auth?.expires || 0));
     return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(new Request(req, { headers }));
   }
 } satisfies ExportedHandler<Env>;
@@ -133,6 +143,7 @@ export class Room {
   private telemetry(d: Device, details = false) { const full = snapshot(d.metrics, d.transport, pacing(this.env)); if (details) return full; const { samples, ...summary } = full; return summary; }
   private async finishRun(d: Device, run: Pipeline, started: number) {
     run.completed_at = Date.now(); run.duration_ms = Math.round(performance.now() - started);
+    logRun(d, run);
     recordRun(d.metrics, run);
     this.metricHistory.set(`telemetry:${d.id}`, d.metrics);
     await this.ctx.storage.put(`telemetry:${d.id}`, d.metrics);
@@ -191,7 +202,7 @@ export class Room {
     const pair = new WebSocketPair(), [client, server] = Object.values(pair);
     server.binaryType = 'arraybuffer';
     server.accept();
-    const p: Peer = { ws: server, role, id, sid, expires: Number(req.headers.get('X-Expires')), seen: Date.now(), pending: new Set(), sentAt: new Map() };
+    const p: Peer = { ws: server, role, id, sid, expires: Number(req.headers.get('X-Expires')), seen: Date.now(), pending: new Set(), sentAt: new Map(), monitor: req.headers.get('X-Monitor') === 'true' };
     if (role === 'device') {
       if (d.peer) close(d.peer, 4001, 'replaced');
       this.cancelConversations(id);
@@ -208,6 +219,7 @@ export class Room {
       d.peer = p; d.stream = crypto.randomUUID(); d.transport = newTransport(d.stream); d.actionSentAt.clear(); d.latest = undefined; d.frames.clear();
       d.seq = 0; d.pan = 0; d.tilt = 0; d.order = 0; d.detectedOrder = -1; d.lastDecision = -1; d.gestureUntil = 0; d.lastDetection = 0;
       d.status = { online: true, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' };
+      logConnection(d, true);
       for (const viewer of d.viewers) { viewer.pending.clear(); viewer.sentAt.clear(); }
       this.broadcast(d, 'stream', { stream_id: d.stream }); this.broadcast(d, 'device_status', d.status); this.broadcast(d, 'emotion', d.emotion); this.broadcast(d, 'mind', d.mind); this.broadcast(d, 'behavior', null);
     } else {
@@ -224,6 +236,7 @@ export class Room {
   }
   private cleanup(p: Peer, d: Device) {
     if (p.role === 'device' && d.peer === p) {
+      logConnection(d, false);
       this.cancelConversations(d.id);
       d.mind = { ...d.mind, revision: d.mind.revision + 1, intent: 'rest', target: { kind: 'none', device_id: null }, valid_until: 0 }; d.behavior = undefined;
       d.peer = undefined; d.stream = null; d.latest = undefined; d.frames.clear(); d.status = offline();
@@ -235,7 +248,7 @@ export class Room {
   private reject(p: Peer, code = 'invalid_message', fatal = false) { send(p, 'error', { code, message: code }); if (fatal) close(p, 1008, code); }
   private message(p: Peer, d: Device, raw: string | ArrayBuffer) {
     if ((p.role === 'device' && d.peer !== p) || (p.role === 'controller' && d.controller !== p)) return;
-    if (p.role === 'controller' && p.expires! <= Date.now()) { close(p, 4003, 'session_expired'); return; }
+    if ((p.role === 'controller' || p.monitor) && p.expires! <= Date.now()) { close(p, 4003, 'session_expired'); return; }
     if (typeof raw !== 'string') {
       if (p.role !== 'device') return this.reject(p, 'forbidden', true);
       const bytes = new Uint8Array(raw);
@@ -249,6 +262,7 @@ export class Room {
       d.latest = frame; d.frames.set(id, { order: frame.order, at: frame.at });
       for (const [key, value] of d.frames) if (Date.now() - value.at > 3000 || d.frames.size > 16) d.frames.delete(key);
       for (const viewer of d.viewers) {
+        if (viewer.monitor) continue;
         if (viewer.pending.size >= 4) { close(viewer, 1013, 'slow_viewer'); this.cleanup(viewer, d); continue; }
         try { viewer.ws.send(raw); viewer.pending.add(id); viewer.sentAt.set(id, performance.now()); } catch { this.cleanup(viewer, d); }
       }
@@ -258,6 +272,7 @@ export class Room {
     const parsed = parseClientMessage(raw, p.role);
     if (!parsed.ok) { if (parsed.code === 'unknown_type') return; return this.reject(p, parsed.code, parsed.fatal); }
     const m = parsed.message;
+    if (p.monitor && !['heartbeat', 'telemetry_request'].includes(m.type)) return this.reject(p, 'forbidden', true);
     if (m.type === 'telemetry_request') {
       if (Date.now() - (p.lastMetricsRequest || 0) < 1000) { send(p, 'error', { code: 'telemetry_rate_limited', message: 'Wait one second before requesting metrics again' }); return; }
       p.lastMetricsRequest = Date.now(); send(p, 'telemetry_snapshot', this.telemetry(d, true));
@@ -304,7 +319,9 @@ export class Room {
   private tick() {
     const now = Date.now();
     for (const d of this.devices.values()) {
-      if (now - d.lastTelemetry >= 5000) { this.broadcast(d, 'telemetry', this.telemetry(d)); d.lastTelemetry = now; }
+      if (now - d.lastTelemetry >= 5000) { const data = this.telemetry(d); this.broadcast(d, 'telemetry', data);  d.lastTelemetry = now; }
+      if (d.peer && now - (d.lastTransportLog || 0) >= 5000) { logTransport(d, this.telemetry(d)); d.lastTransportLog = now; }
+      for (const viewer of d.viewers) if (viewer.monitor && viewer.expires! <= now) { close(viewer, 4003, 'session_expired'); this.cleanup(viewer, d); }
       if (d.peer && now - d.peer.seen >= 15000) { const p = d.peer; close(p, 4000, 'status_timeout'); this.cleanup(p, d); }
       if (d.controller && (d.controller.expires! <= now || now - d.controller.seen >= 15000)) {
         const p = d.controller; close(p, p.expires! <= now ? 4003 : 4000, 'controller_timeout'); this.cleanup(p, d);

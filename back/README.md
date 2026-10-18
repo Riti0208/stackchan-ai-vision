@@ -358,3 +358,29 @@ BEは送信payloadを型チェックし、受信JSONは`parseClientMessage`で�
 FWがC++の場合も、この型と[通信仕様](../doc/communication_protocol_v1.md)を基準に実装する。
 `npm run typecheck`はBE・シミュレーター・不正payloadを検出する型テストをまとめて実行する。
 送信できる型と、ネットから届いたJSONの検証は別の責務。接続世代・順序・認証・期限のチェックはBEに残す。
+
+## 部屋モニターと運用ログ
+
+公開BEの `/monitor` は、プロダクトFEとは別の読み取り専用画面。
+ルーム名と部屋の制御トークンを入力して接続する。トークンはブラウザの永続ストレージへ保存せず、
+既存のHttpOnlyセッションCookieで認証する。画面を開くだけでは通信を開始せず、接続後も
+既存の状態と計測値を購読するだけで、カメラ・シミュレーター・画像解析・実APIを開始しない。
+実APIセッションが既に有効なら、その状態と使用回数を表示する。観察中もFWからの映像による既存処理は継続する。
+
+`/ws/monitor?room=main&device_id=stackchan-01` はOriginと部屋セッションを必須とし、
+制御権を取得しない。映像は中継せず、既存のJSONイベントとtelemetryを受信する。
+送信できるのは `heartbeat` と `telemetry_request` のみ。セッション期限切れ時は切断する。
+モニターを閉じるか「切断」を押すと購読と再接続を停止する。
+APIの表示は直近120件の保持履歴に基づき、累計回数と区別する。
+
+公開設定ではCloudflare Workers Logsを有効にしている。WorkerのObservabilityで
+`event`、`room`、`device_id`、`run_id`を使って絞り込む。
+- `device_connection`: 本体の接続・切断
+- `device_transport`: 接続中の本体ごとに約5秒間隔で受信FPS、フレーム数、バイト数、ACK RTT
+- `openai_call`: 各呼び出しの処理段階、HTTP状態、成否、RTT、使用トークン数、request ID
+- `pipeline_completed`: 一連の処理の成否・棄却理由・所要時間・API呼び出し数
+
+ログは明示したメタデータだけを出力し、画像・APIキー・部屋トークン・プロンプト・本音・会話本文は出力しない。
+Cloudflareの呼び出しログや例外ログと併用して障害を調べる。
+WebSocketのリアルタイムログは接続終了まで表示されない場合があるため、進行中の部屋の確認はモニターを使う。
+履歴の保存期間・上限・サンプリングはCloudflare側の設定とプランに従う。全フレームを1件ずつログに残さない。

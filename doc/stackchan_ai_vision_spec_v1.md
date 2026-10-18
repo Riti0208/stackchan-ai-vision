@@ -338,3 +338,12 @@ Realtimeの推奨モデルはgpt-live-transcribe。24kHz PCMの例では、ク�
 - [StackChan公式仕様](https://docs.m5stack.com/en/StackChan)
 - [M5UnifiedでのStackChanマイク取得例](https://docs.m5stack.com/en/arduino/stackchan/mic)
 - [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)
+
+## 運用の可視化
+
+BEの`/monitor`で部屋を認証し、複数台の接続、感情・意向、本音と建前、通信とAPIの計測値を観察する。
+製品FEから独立した読み取り専用画面で、制御権・映像送信・検出結果送信・実APIの開始操作を持たない。
+開くだけでは実APIを呼び出さず、認証後の購読も新しい解析を発生させない。
+既に有効な実API処理の結果を受け取ることはある。公開運用の開始UIは引き続き未実装。
+Cloudflareには接続イベント、約5秒ごとの通信サマリー、APIごとの成否・RTT・使用量、
+処理全体の結果を構造化ログとして出す。画像・秘密情報・本音・会話本文はログへ保存しない。

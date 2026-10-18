@@ -244,3 +244,33 @@ test('telemetry measures upload, viewer ACK and FW action ACK round trips withou
   assert.ok(!JSON.stringify(sample).includes('base64'));assert.ok(!JSON.stringify(sample).includes('dev-isolated-01'));
  } finally {sim.stop();viewer.ws.close(1000);}
 });
+
+test('authenticated monitor coexists with controller, receives metrics but no JPEGs, and cannot steer', async () => {
+  cookie = await login();
+  await rejected('/ws/monitor?room=main&device_id=stackchan-01', { Origin: origin }, 401);
+  await rejected('/ws/monitor?room=main&device_id=stackchan-01', { Origin: 'https://evil.example', Cookie: cookie }, 403);
+  const device = await connect('stackchan-01', 'device', 'dev-device-01');
+  const controller = await connect('stackchan-01', 'controller', cookie);
+  const socket = new WebSocket(`${base.replace('http','ws')}/ws/monitor?room=main&device_id=stackchan-01`, { headers: { Origin: origin, Cookie: cookie } });
+  active.add(socket); const messages = [];
+  socket.on('message', (raw, binary) => messages.push(binary ? Buffer.from(raw) : JSON.parse(raw.toString())));
+  await once(socket, 'open');
+  socket.send(env('telemetry_request', {}));
+  for(let i=0;i<50&&!messages.some(m=>m.type==='telemetry_snapshot');i++) await sleep(20);
+  assert.ok(messages.some(m=>m.type==='session' && m.data.role==='viewer'));
+  assert.ok(messages.some(m=>m.type==='telemetry_snapshot'));
+  const stream = (await controller.wait(m=>m.type==='stream')).data.stream_id;
+  await frame(device, 0); await controller.wait(Buffer.isBuffer); await sleep(100);
+  assert.ok(!messages.some(Buffer.isBuffer), 'monitor must not consume images or interfere with frame ACKs');
+  controller.send('heartbeat', {}); await controller.wait(m=>m.type==='heartbeat');
+  const closed=once(socket,'close'); socket.send(env('detection',detect(stream,0)));
+  assert.equal((await closed)[0],1008);
+  assert.ok(!device.messages.some(m=>m.type==='action' && m.data.action==='look_at'));
+  device.ws.close(1000); controller.ws.close(1000);
+  const html=await fetch(base+'/monitor'); assert.equal(html.status,200);
+  assert.match(html.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  assert.match(await html.text(),/部屋モニター/);
+  const script=await fetch(base+'/monitor/app.js'); assert.match(script.headers.get('content-type'),/javascript/);
+  assert.match(await script.text(),/\/ws\/monitor/);
+  assert.match(workerLog,/device_connection/);
+});

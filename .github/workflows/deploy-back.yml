@@ -48,7 +48,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Verify production health and paid API guard
+      - name: Verify production health, monitor and paid API guard
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
@@ -73,5 +73,8 @@ jobs:
           const list = await fetch(`${base}/api/rooms/main/devices`, { signal: AbortSignal.timeout(15000) });
           assert.equal(list.status, 200);
           assert.ok(Array.isArray((await list.json()).devices));
-          console.log('Frontend and backend healthy; vision assets available; paid API session inactive.');
+          const monitor = await fetch(new URL('/monitor', url), { signal: AbortSignal.timeout(15000) });
+          assert.equal(monitor.status, 200);
+          assert.match(await monitor.text(), /StackChan 部屋モニター/);
+          console.log('Production and read-only monitor healthy; paid API session inactive.');
           JS

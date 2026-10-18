@@ -31,7 +31,13 @@ async function fixture(vars) {
     const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/device?room=${room}&device_id=robot`, { headers: { Authorization: 'Bearer fake-device' } }); sockets.push(ws); await once(ws, 'open');
     const jpeg = await syntheticJPEG(1), packet = Buffer.alloc(jpeg.length + 4); packet.writeUInt32BE(1); jpeg.copy(packet, 4); ws.send(packet); return ws;
   }
-  return { start, stop, connect, health: async () => (await (await fetch(`${base}/health`)).json()).paid_session, count: async room => (await (await fetch(`${base}/__test/count?room=${room}`)).json()).length, cleanup: async () => { await stop(); await rm(directory, { recursive: true, force: true }); } };
+  return { start, stop, connect, monitor: async () => {
+    const origin='http://127.0.0.1:8787';
+    const response=await fetch(base+'/api/control/session',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({room:'main',token:'fake'})});
+    assert.equal(response.status,200);
+    const ws=new WebSocket(base.replace('http','ws')+'/ws/monitor?room=main&device_id=robot',{headers:{Origin:origin,Cookie:response.headers.get('set-cookie').split(';')[0]}});
+    sockets.push(ws);await once(ws,'open');ws.send(JSON.stringify({type:'telemetry_request',timestamp:Date.now(),data:{}}));return ws;
+  }, health: async () => (await (await fetch(`${base}/health`)).json()).paid_session, count: async room => (await (await fetch(`${base}/__test/count?room=${room}`)).json()).length, cleanup: async () => { await stop(); await rm(directory, { recursive: true, force: true }); } };
 }
 test('actual DO budget caps concurrent rooms and survives reconnect and Worker restart', async () => {
   const f = await fixture({ PAID_SESSION_ID: 'paid-e2e', PAID_SESSION_UNTIL: String(Date.now() + 60000), PAID_SESSION_MAX_CALLS: '2' });
@@ -54,4 +60,13 @@ test('expired session makes zero upstream requests', async () => {
   const f = await fixture({ PAID_SESSION_ID: 'expired-e2e', PAID_SESSION_UNTIL: String(Date.now() - 1), PAID_SESSION_MAX_CALLS: '30' });
   try { await f.start(); await f.connect('main'); await sleep(700); assert.equal((await f.health()).reason, 'expired'); assert.equal(await f.count('main'), 0); }
   finally { await f.cleanup(); }
+});
+
+test('opening monitor and authenticated subscriptions do not call upstream even with an active paid session', async () => {
+  const f=await fixture({PAID_SESSION_ID:'monitor-no-side-effects',PAID_SESSION_UNTIL:String(Date.now()+60000),PAID_SESSION_MAX_CALLS:'30'});
+  try {
+    await f.start(); assert.equal((await fetch(base+'/monitor')).status,200); assert.equal((await fetch(base+'/monitor/app.js')).status,200);
+    await f.monitor(); await sleep(1700);
+    assert.equal((await f.health()).active,true); assert.equal((await f.health()).used_calls,0); assert.equal(await f.count('main'),0);
+  } finally {await f.cleanup();}
 });

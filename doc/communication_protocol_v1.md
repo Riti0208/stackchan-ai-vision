@@ -1,4 +1,4 @@
-# 通信仕様 v1.7 — FE / BE / FW
+# 通信仕様 v1.8 — FE / BE / FW
 
 更新日: 2026-10-18。対象: 2026-10-18のハッカソン。
 
@@ -8,7 +8,7 @@
 
 ## 通信契約の型と共有方法
 
-コード上の入口は [`back/src/protocol.ts`](../back/src/protocol.ts)。文書の改訂はv1.7、WSの`protocol_version`は引き続き1。
+コード上の入口は [`back/src/protocol.ts`](../back/src/protocol.ts)。文書の改訂はv1.8、WSの`protocol_version`は引き続き1。
 FEは`ClientMessage` / `ServerMessage`を型としてimportする。FW実装者はこの文書の値域・送信経路を参照する。
 
 - `ClientData` / `ServerData`: メッセージ種別からdata型への対応。`ClientMessage` / `ServerMessage`はtypeでdataを絞り込めるunion。
@@ -40,7 +40,7 @@ BEは全送信イベントのdata型をチェックし、シミュレーター�
 
 ## 1. 設計案からの変更と固定事項
 
-[設計書 v1.7](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
+[設計書 v1.8](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
 以下は設計案の追加・変更であり、通信については本書を優先する。
 
 - **同一roomに複数のスタックチャンが参加可能**。各本体はroom内で一意な`device_id`を持つ。
@@ -316,7 +316,7 @@ callsの各項目はendpoint(decisions/responses)、model、request_id(string/nu
 意向・文章の再利用時はresponsesの呼び出しが含まれない。mockはcalls=[]、各合計0。
 APIキー・プロンプト・APIの生レスポンスはイベントに含めない。
 
-v1.7のdecisionにはaffectも付く。形は次のとおり。
+v1.8のdecisionにはaffectも付く。形は次のとおり。
 
 ```json
 {"provider":"openai","model":"gpt-6-luna","previous_emotion":{"happiness":0.5,"curiosity":0.5,"excitement":0.2,"shyness":0.8,"trust":0.5},"confidence":{"happiness":0.8,"curiosity":0.9,"excitement":0.8,"shyness":0.7,"trust":0.6},"history_size":3,"received_message_is_new":true}
@@ -548,7 +548,7 @@ FPS・推論周期・遅延や複数台時の負荷は未検証。接続台数�
 
 ## 参考
 
-- [設計書 v1.7（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
+- [設計書 v1.8（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
 - [Cloudflare Durable Objects WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
 - [ブラウザのWebSocketコンストラクター](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/WebSocket)
 
@@ -571,3 +571,14 @@ DecisionsとResponsesを送信前の予約で合算し、失敗とタイムア�
 映像や質問数、ドル建て費用ではない。参照は開始・延長・回数リセットをしない。
 上限後はBEで送信を拒否し、デモプロセスは自動終了する。時間切れは進行中の通信も中断する。
 起動と上限のオプションは[起動手順](../back/README.md)を参照。
+
+## 運用モニター（読み取り専用）
+
+`GET /monitor`と`GET /monitor/app.js`はBEが直接配信する。開くだけでは解析も実APIも開始しない。
+部屋トークンを既存の`POST /api/control/session`に渡し、HttpOnly Cookieで認証する。
+`GET /ws/monitor?room=<room>&device_id=<id>`は許可Originとその部屋のセッションを必須とする。
+`session.data.role`は`viewer`で、制御スロットを占有しない。既存のJSONイベントを購読し、
+JPEGは受信しない。送信可能なメッセージは`heartbeat`と`telemetry_request`だけ。
+`detection`やバイナリ等の書き込みは拒否する。セッション期限切れは4003で切断する。
+再接続してもFWや解析の開始は行わない。モニター専用の内部ヘッダーを外部から指定してもBEが上書きする。
+`telemetry_snapshot`は既存の直近API120件・パイプライン60件の履歴を返し、累計とは区別する。
