@@ -6,3 +6,7 @@ test-results/
 playwright-report/
 *.log
 dist/
+
+/fw/secrets.h
+
+/work/

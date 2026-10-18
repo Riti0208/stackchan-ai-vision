@@ -1,0 +1,21 @@
+{
+    "name": "M5StackChan",
+    "description": "Library for M5StackChan",
+    "keywords": "M5Stack,M5StackChan",
+    "authors": {
+        "name": "M5Stack"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/m5stack/StackChan-BSP"
+    },
+    "dependencies": {
+        "M5Unified": "*",
+        "M5GFX": "*",
+        "IRremoteESP8266": "*",
+        "M5Unit-NFC": "*"
+    },
+    "version": "1.0.1",
+    "frameworks": "arduino",
+    "platforms": "espressif32"
+}
