@@ -113,9 +113,9 @@ function render(id) {
   pair(stats,'受信量',t ? (t.transport.bytes_received / 1024).toFixed(1) + ' KiB' : '—');
   pair(stats,'API呼び出し累計',num(t?.api_attempts_total));
   pair(stats,'アップロード p95',num(t?.transport.upload_rtt.p95_ms,' ms'));
-  pair(stats,'バックエンドJPEG変換 p95',num(t?.transport.conversion.p95_ms,' ms'));
-  pair(stats,'ビューア描画ACK p95',num(t?.transport.viewer_ack_rtt.p95_ms,' ms'));
-  pair(stats,'JPEG変換 / 配信',t ? num(t.transport.conversion.converted_total)+' / '+num(t.transport.conversion.published_total)+' · drop '+num(t.transport.conversion.dropped_total) : '—');
+  pair(stats,'バックエンドJPEG変換 p95',num(t?.transport.conversion?.p95_ms,' ms'));
+  pair(stats,'ビューア描画ACK p95',num(t?.transport.viewer_ack_rtt?.p95_ms,' ms'));
+  pair(stats,'JPEG変換 / 配信',t ? num(t.transport.conversion?.converted_total)+' / '+num(t.transport.conversion?.published_total)+' · drop '+num(t.transport.conversion?.dropped_total) : '—');
   pair(stats,'指令ACK p95',num(t?.transport.action_ack_rtt.p95_ms,' ms'));
   pair(stats,'映像→動作ACK p95',num(t?.transport.frame_to_action_ack.p95_ms,' ms'));
   pair(stats,'処理全体 p95',num(t?.pipeline.p95_ms,' ms'));
