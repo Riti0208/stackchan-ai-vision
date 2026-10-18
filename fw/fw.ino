@@ -14,7 +14,7 @@
 
 // Stage 2 was verified on hardware; stage 3 adds the authenticated WSS transport.
 constexpr int PAN_LIMIT = 300;    // 0.1 degree units
-constexpr int TILT_CENTER = 350; // Default gaze: 10 degrees below the former 45-degree neutral.
+constexpr int TILT_CENTER = 300; // Default gaze: 15 degrees below the former 45-degree neutral.
 constexpr int PITCH_MIN = 300, PITCH_MAX = 600; // Preserve calibrated physical servo limits.
 constexpr int TILT_LIMIT = 150;
 constexpr int SERVO_SPEED = 350; // Official Motion scale: 0..1000
