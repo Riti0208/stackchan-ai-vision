@@ -2,10 +2,17 @@
 #include "Behavior.h"
 #include <M5Unified.h>
 namespace stackchan_fw {
+inline bool& faceCacheValid() { static bool valid=false; return valid; }
+inline Expression& lastFaceExpression() { static Expression value=Expression::Neutral; return value; }
+inline int& lastFaceDx() { static int value=0; return value; }
+inline int& lastFaceDy() { static int value=0; return value; }
+inline void invalidateFace() { faceCacheValid()=false; }
 inline void drawFace(Expression expression,float pan,float tilt) {
+  int dx=static_cast<int>(pan/5),dy=static_cast<int>(-tilt/4);
+  if(faceCacheValid() && lastFaceExpression()==expression && lastFaceDx()==dx && lastFaceDy()==dy) return;
+  faceCacheValid()=true;lastFaceExpression()=expression;lastFaceDx()=dx;lastFaceDy()=dy;
   auto& d=M5.Display;
   d.startWrite();d.fillScreen(TFT_BLACK);
-  int dx=static_cast<int>(pan/5),dy=static_cast<int>(-tilt/4);
   int x1=94+dx,x2=226+dx,y=94+dy;
   if(expression==Expression::Happy) {
     for(int x : {x1,x2}) {d.drawLine(x-17,y+7,x,y-7,TFT_WHITE);d.drawLine(x,y-7,x+17,y+7,TFT_WHITE);}

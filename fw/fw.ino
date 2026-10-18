@@ -275,7 +275,11 @@ void loop() {
       case 'X': stackchan_fw::requestWssReconnect(); break;
 #endif
 #if FW_STAGE >= 6
-      case 'V': cameraPreview = !cameraPreview; Serial.printf("DISPLAY %s\n", cameraPreview ? "preview" : "face"); break;
+      case 'V':
+        cameraPreview = !cameraPreview;
+        if (!cameraPreview) stackchan_fw::invalidateFace();
+        Serial.printf("DISPLAY %s\n", cameraPreview ? "preview" : "face");
+        break;
 #endif
     }
   }
