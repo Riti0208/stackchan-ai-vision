@@ -6,7 +6,8 @@ export const personalities = {
   cautious: { label: '慎重', description: 'Cautious around unfamiliar situations; observes first, builds comfort gradually through its own experiences and speaks carefully.', restrained: true, emotion: { happiness: .4, curiosity: .55, excitement: .2, shyness: .6, trust: .3 } },
   playful: { label: 'いたずら好き', description: 'Playful and imaginative; enjoys harmless surprises and light teasing, while respecting others and keeping motions within allowed commands.', restrained: false, emotion: { happiness: .6, curiosity: .7, excitement: .6, shyness: .2, trust: .5 } }
 } as const;
-export type Personality = keyof typeof personalities;
+import type { Personality } from './protocol.ts';
+export type { Personality } from './protocol.ts';
 export const personalityKeys = Object.keys(personalities) as Personality[];
 export const isPersonality = (value: unknown): value is Personality => typeof value === 'string' && Object.hasOwn(personalities, value);
 export function choosePersonality(configured?: unknown, random = () => crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000): Personality {

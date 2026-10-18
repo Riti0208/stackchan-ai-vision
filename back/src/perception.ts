@@ -1,7 +1,8 @@
 import { initialEmotion } from './personality.ts';
 import type { Intent, Personality } from './social';
 export const emotionKeys = ['happiness', 'curiosity', 'excitement', 'shyness', 'trust'] as const;
-export type Emotion = Record<typeof emotionKeys[number], number>;
+import type { Emotion, Observation, Affect } from './protocol.ts';
+export type { Emotion, Observation, Affect } from './protocol.ts';
 export const visibleQuestions = [
   ['person_present', 'Is an actual person visible, rather than only a drawing or toy?'],
   ['smiling', 'Does the largest visible face show an upturned-mouth smile?'],
@@ -18,9 +19,7 @@ export const expressionChoices = [
   ['surprised_looking', 'A surprised-looking display with wide eyes or an open mouth'],
   ['neutral', 'A relatively neutral facial display'], ['unclear', 'No actual person, no clear face, or insufficient visual evidence']
 ] as const;
-export type Observation = Record<typeof visibleQuestions[number][0], number> & { apparent_expression: { label: typeof expressionChoices[number][0]; confidence: number } };
 export type Experience = { at: number; kind: 'observation' | 'dialogue' | 'human_action'; human_action?: { id: string; changes: string[] }; message_id: string | null; emotion_before: Emotion; emotion_after: Emotion; intent: Intent; expression: Observation['apparent_expression']['label'] };
-export type Affect = { provider: 'openai' | 'mock'; model: 'gpt-6-luna' | null; previous_emotion: Emotion; confidence: Emotion; history_size: number; received_message_is_new: boolean };
 export function projectExperiences(history: Experience[]) {
   return history.slice(-6).map(e => ({ at: e.at, kind: e.kind, message_id: e.message_id, emotion_before: Object.fromEntries(emotionKeys.map(k => [k, e.emotion_before[k]])), emotion_after: Object.fromEntries(emotionKeys.map(k => [k, e.emotion_after[k]])), intent: e.intent, expression: e.expression, ...(e.human_action ? { human_action: { id: e.human_action.id, changes: e.human_action.changes } } : {}) }));
 }

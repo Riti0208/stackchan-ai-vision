@@ -78,5 +78,5 @@ export async function callNarration(apiKey: string, payload: object, speech: boo
   });
 }
 export function summarizeCalls(calls: CallMetrics[], live: boolean) {
-  return { provider: live ? 'openai' : 'mock', model: live ? DECISIONS_MODEL : null, requests: calls.length, input_tokens: calls.reduce((sum, c) => sum + c.input_tokens, 0), output_tokens: calls.reduce((sum, c) => sum + c.output_tokens, 0), latency_ms: calls.reduce((sum, c) => sum + c.latency_ms, 0), request_ids: calls.flatMap(c => c.request_id ? [c.request_id] : []), calls };
+  return { provider: live ? 'openai' as const : 'mock' as const, model: live ? DECISIONS_MODEL : null, requests: calls.length, input_tokens: calls.reduce((sum, c) => sum + c.input_tokens, 0), output_tokens: calls.reduce((sum, c) => sum + c.output_tokens, 0), latency_ms: calls.reduce((sum, c) => sum + c.latency_ms, 0), request_ids: calls.flatMap(c => c.request_id ? [c.request_id] : []), calls };
 }

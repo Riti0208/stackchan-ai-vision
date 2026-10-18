@@ -26,10 +26,11 @@ export function pacing(env: { STREAM_FPS?: string; EVAL_INTERVAL_MS?: string; NA
   return { stream_fps: number(env.STREAM_FPS, 2, 1, 10), evaluation_interval_ms: number(env.EVAL_INTERVAL_MS, 2000, 500, 10000), narration_interval_ms: number(env.NARRATION_INTERVAL_MS, 2000, 1000, 30000) };
 }
 export function snapshot(history: History, transport: Transport, configuration: ReturnType<typeof pacing>, now = Date.now()) {
-  const stages = Object.fromEntries((['perception','intention','narration'] as Stage[]).map(stage => {
+  const entries = (['perception','intention','narration'] as Stage[]).map(stage => {
     const all = history.api.filter(a=>a.stage===stage), current = all.filter(a=>a.stream_id===transport.stream_id);
-    return [stage, { ...stats(all.map(a=>a.rtt_ms)), errors: all.filter(a=>a.outcome!=='success').length, timeouts: all.filter(a=>a.outcome==='timeout').length, interval: stats(current.slice(1).map((a,i)=>a.started_at-current[i].started_at)) }];
-  }));
+    return [stage, { ...stats(all.map(a=>a.rtt_ms)), errors: all.filter(a=>a.outcome!=='success').length, timeouts: all.filter(a=>a.outcome==='timeout').length, interval: stats(current.slice(1).map((a,i)=>a.started_at-current[i].started_at)) }] as const;
+  });
+  const stages = Object.fromEntries(entries) as Record<Stage, typeof entries[number][1]>;
   const frames = transport.frames.filter(f=>now-f.at<=30000), intervals=frames.slice(1).map((f,i)=>f.at-frames[i].at);
   const span = frames.length>1 ? frames.at(-1)!.at-frames[0].at : 0;
   return { version: 1, recorded_at: now, stream_id: transport.stream_id, pacing: configuration, api_attempts_total: history.api_attempts_total, pipeline_total: history.pipeline_total, stages,

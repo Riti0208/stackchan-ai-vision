@@ -3,18 +3,18 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.6"
   },
   "scripts": {
-    "dev": "node scripts/wrangler.mjs dev --config wrangler.local.jsonc --ip 127.0.0.1 --port 8787",
-    "demo": "node scripts/demo.mjs",
-    "sim": "node scripts/fw-simulator.mjs",
-    "typecheck": "tsc --noEmit",
-    "test:e2e": "node --test --test-concurrency=1 test/e2e.test.mjs test/luna-e2e.test.mjs test/paid-e2e.test.mjs",
-    "build": "node scripts/wrangler.mjs deploy --dry-run --outdir dist",
-    "deploy": "node scripts/wrangler.mjs deploy",
-    "test:unit": "node --experimental-strip-types --test test/social.test.mjs test/openai.test.mjs test/local-env.test.mjs test/perception.test.mjs test/human-actions.test.mjs test/telemetry.test.mjs test/paid-session.test.mjs",
-    "demo:openai": "node scripts/demo.mjs --openai",
+    "dev": "node --experimental-strip-types scripts/wrangler.mjs dev --config wrangler.local.jsonc --ip 127.0.0.1 --port 8787",
+    "demo": "node --experimental-strip-types scripts/demo.mjs",
+    "sim": "node --experimental-strip-types scripts/fw-simulator.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.simulator.json",
+    "test:e2e": "node --experimental-strip-types --test --test-concurrency=1 test/e2e.test.mjs test/luna-e2e.test.mjs test/paid-e2e.test.mjs test/fw-protocol.test.mjs",
+    "build": "node --experimental-strip-types scripts/wrangler.mjs deploy --dry-run --outdir dist",
+    "deploy": "node --experimental-strip-types scripts/wrangler.mjs deploy",
+    "test:unit": "node --experimental-strip-types --test test/social.test.mjs test/openai.test.mjs test/local-env.test.mjs test/perception.test.mjs test/human-actions.test.mjs test/telemetry.test.mjs test/paid-session.test.mjs test/protocol.test.mjs",
+    "demo:openai": "node --experimental-strip-types scripts/demo.mjs --openai",
     "check:openai": "node --experimental-strip-types scripts/check-openai.mjs",
     "check:affect": "node --experimental-strip-types scripts/check-affect.mjs",
     "metrics": "node --experimental-strip-types scripts/collect-metrics.mjs"
@@ -25,6 +25,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261016.1",
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.2",
     "typescript": "~5.9.3",
     "wrangler": "4.151.1"
   }

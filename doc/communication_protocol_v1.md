@@ -1,4 +1,4 @@
-# 通信仕様 v1.6 — FE / BE / FW
+# 通信仕様 v1.7 — FE / BE / FW
 
 更新日: 2026-10-18。対象: 2026-10-18のハッカソン。
 
@@ -6,9 +6,41 @@
 公開BE・実機・本番FEとの接続確認は別途行う。
 本番DOMAINと接続用の秘密情報は別途チームへ共有する。
 
+## 通信契約の型と共有方法
+
+コード上の入口は [`back/src/protocol.ts`](../back/src/protocol.ts)。文書の改訂はv1.7、WSの`protocol_version`は引き続き1。
+FEは`ClientMessage` / `ServerMessage`を型としてimportする。FW実装者はこの文書の値域・送信経路を参照する。
+
+- `ClientData` / `ServerData`: メッセージ種別からdata型への対応。`ClientMessage` / `ServerMessage`はtypeでdataを絞り込めるunion。
+- `DeviceMessage` / `DeviceServerMessage`: FWに許可する送信・受信の型。`Motion`には本音を含めない。
+- `Mind` / `Emotion` / `Decision` / `Behavior` / `Dialogue`等も同じファイルで公開。従来のBE内モジュールからの型exportは互換のため残す。
+- `parseClientMessage(raw, role)`: JSONの構造・値域・送信roleを検証し、成功時だけ型付きメッセージを返す。BEで共通利用する。
+- `parseDeviceServerMessage(raw)`: FWシミュレーターが動作指令の角度・表情・時間等を検証する。不正指令はseqを消費せず無視する。
+- `serializeClient(message)` / `serializeServer(type, data)`: 型を使った送信。受信時の検証を省略する理由にはしない。
+
+```ts
+import type { ClientMessage, ServerMessage } from '../back/src/protocol';
+
+const ack: ClientMessage = {
+  type: 'frame_ack', timestamp: Date.now(),
+  data: { stream_id: 'current-stream', frame_id: 120 }
+};
+function show(message: ServerMessage) {
+  if (message.type === 'mind') console.log(message.data.thought);
+}
+```
+
+BEは全送信イベントのdata型をチェックし、シミュレーターはJSのままJSDoc＋`checkJs`のstrictチェックで共有型を参照する。
+`npm run typecheck`で両方と通信契約の型テストを実行する。`test/protocol-types.ts`は不正な送信や本音のFW送信をコンパイル時に検出できることを確認する。
+型はJSONの実値を保証しない。BEは検証後も認証、接続世代、seq・frame順序、期限、ジェスチャー中の制限を別途確認する。
+`parseClientMessage`の`unknown_type`は互換性のためBEで無視する。既知typeの権限違反は従来どおり`forbidden`で切断する。
+未知の追加フィールドは受信時に無視する。`heartbeat` / `telemetry_request`の既知のdata項目は空。
+本音は本人のFE向け、公開会話はroomのFEと宛先の会話入力向け、動作指令は対象FW向けとする。
+ローカル専用の`/monitor`・`/camera`ゲートウェイイベントは公開WS契約に含めない。
+
 ## 1. 設計案からの変更と固定事項
 
-[設計書 v1.6](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
+[設計書 v1.7](stackchan_ai_vision_spec_v1.md)のJSONフィールド・動作語彙・画像ヘッダーを引き継ぐ。
 以下は設計案の追加・変更であり、通信については本書を優先する。
 
 - **同一roomに複数のスタックチャンが参加可能**。各本体はroom内で一意な`device_id`を持つ。
@@ -191,9 +223,9 @@ JPEGヘッダーのIDは**そのソケットの現在のstream内**でのみ有�
 | イベント | dataのフィールド |
 |---|---|
 | `emotion` | `happiness`, `curiosity`, `excitement`, `shyness`, `trust`: 各number 0〜1 |
-| `decision` | `stream_id`: string、`frame_id`: uint32、`observations`: 下記8項目と表情分類、`selected_action`: Action、`confidence`: number 0〜1 |
-| `action` | `seq`: 正整数、`action`: Action、`pan`, `tilt`: number -1〜1、`expression`: Expression、`duration_ms`: 整数100〜3000 |
-| `device_status` | `online`: boolean、`fps`: number 0以上、`wifi_rssi`: numberまたはnull、`battery`: number 0〜100またはnull、`current_action`: Action |
+| `decision` | `stream_id`: string、`frame_id`: uint32、`observations`: 下記8項目と表情分類、`selected_action`: Action、`confidence`: number 0〜1、`mind_revision`、`intent`、`affect`、`human_action`、`reaction`、`ai`（下記と各節を参照） |
+| `action` | `seq`: 1〜4294967295の整数、`action`: Action、`pan`, `tilt`: number -1〜1、`expression`: Expression、`duration_ms`: 整数100〜3000 |
+| `device_status` | `online`: boolean、`fps`: number 0〜1000、`wifi_rssi`: number -200〜100またはnull、`battery`: number 0〜100またはnull、`current_action`: Action |
 
 - Action = `idle | look_at | nod | shake | happy`。
 - Expression = `neutral | happy | sad | surprised | thinking`。
@@ -203,7 +235,7 @@ JPEGヘッダーのIDは**そのソケットの現在のstream内**でのみ有�
 - `decision`はBEが整形するアプリイベント。外部AI APIの生レスポンスにFE/FWを依存させない。
 
 ```json
-{"type":"decision","timestamp":1792300000000,"data":{"stream_id":"opaque-stream-id","frame_id":120,"observations":{"person_present":0.98,"smiling":0.91,"looking_at_robot":0.74,"waving":0.12,"frowning":0.05,"eyes_wide":0.1,"mouth_open":0.05,"tears_visible":0.01,"apparent_expression":{"label":"smiling","confidence":0.9}},"selected_action":"happy","confidence":0.87,"mind_revision":1,"intent":"greet"}}
+{"type":"decision","timestamp":1792300000000,"data":{"stream_id":"opaque-stream-id","frame_id":120,"observations":{"person_present":0.98,"smiling":0.91,"looking_at_robot":0.74,"waving":0.12,"frowning":0.05,"eyes_wide":0.1,"mouth_open":0.05,"tears_visible":0.01,"apparent_expression":{"label":"smiling","confidence":0.9}},"selected_action":"happy","confidence":0.87,"mind_revision":1,"intent":"greet","affect":{"provider":"mock","model":null,"previous_emotion":{"happiness":0.5,"curiosity":0.5,"excitement":0.5,"shyness":0.5,"trust":0.5},"confidence":{"happiness":1,"curiosity":1,"excitement":1,"shyness":1,"trust":1},"history_size":0,"received_message_is_new":false},"human_action":null,"reaction":{"trigger":"initial","intent_reassessed":true,"command_issued":true,"selected_choice":"greet:stackchan-02","event_id":null},"ai":{"provider":"mock","model":null,"requests":0,"input_tokens":0,"output_tokens":0,"latency_ms":0,"request_ids":[],"calls":[]}}}
 ```
 
 ```json
@@ -284,7 +316,7 @@ callsの各項目はendpoint(decisions/responses)、model、request_id(string/nu
 意向・文章の再利用時はresponsesの呼び出しが含まれない。mockはcalls=[]、各合計0。
 APIキー・プロンプト・APIの生レスポンスはイベントに含めない。
 
-v1.6のdecisionにはaffectも付く。形は次のとおり。
+v1.7のdecisionにはaffectも付く。形は次のとおり。
 
 ```json
 {"provider":"openai","model":"gpt-6-luna","previous_emotion":{"happiness":0.5,"curiosity":0.5,"excitement":0.2,"shyness":0.8,"trust":0.5},"confidence":{"happiness":0.8,"curiosity":0.9,"excitement":0.8,"shyness":0.7,"trust":0.6},"history_size":3,"received_message_is_new":true}
@@ -516,7 +548,7 @@ FPS・推論周期・遅延や複数台時の負荷は未検証。接続台数�
 
 ## 参考
 
-- [設計書 v1.6（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
+- [設計書 v1.7（既存JSONの詳細例）](stackchan_ai_vision_spec_v1.md)
 - [Cloudflare Durable Objects WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
 - [ブラウザのWebSocketコンストラクター](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/WebSocket)
 

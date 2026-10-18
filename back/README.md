@@ -5,7 +5,7 @@ Cloudflare Workers + Durable Objectsで動くBEと、同じ通信契約を使う
 
 ## 起動
 
-Node.js 22以上。初回は依存パッケージの取得にネット接続が必要。以後mockモードの実行に
+Node.js 22.6以上（22.18以降を推奨）。共有契約のTypeScriptをNodeの型除去で読み込むため、npmスクリプトは`--experimental-strip-types`を指定する。初回は依存パッケージの取得にネット接続が必要。以後mockモードの実行に
 OpenAI・Cloudflareのアカウントや外部モデル/CDNは不要。
 
 ```sh
@@ -313,3 +313,13 @@ STREAM_FPSは1〜10（demoは範囲外の設定を起動時に拒否）、判断
 frame_receivedとaction_ackに対応したローカルFWシミュレーターで通信RTTを計測する。実FWがACKに未対応なら該当欄は未計測。
 BE画像受信→FW受信ACKは撮影開始→モーター完了の時間ではない。FE受信ACKも描画前であり、GPU描画時間とは区別する。
 音声入力・文字起こしは設計書の拡張候補を参照。現在はマイクを取得せず、APIにも音声を送らない。
+
+## FE / FWとの共有型
+
+通信契約は[`src/protocol.ts`](src/protocol.ts)へ集約した。送受信union、role別の型、感情・本音・動作・公開会話の型をここから参照する。
+BEは送信payloadを型チェックし、受信JSONは`parseClientMessage`で検証してから利用する。
+`fw-simulator.mjs`も同じファイルの`serializeClient` / `parseDeviceServerMessage`を使い、JSDoc＋strictなcheckJsで通信部分を含むファイル全体を検査する。
+他チームのFEからは`import type { ClientMessage, ServerMessage } from '../back/src/protocol'`のように型を参照できる。
+FWがC++の場合も、この型と[通信仕様](../doc/communication_protocol_v1.md)を基準に実装する。
+`npm run typecheck`はBE・シミュレーター・不正payloadを検出する型テストをまとめて実行する。
+送信できる型と、ネットから届いたJSONの検証は別の責務。接続世代・順序・認証・期限のチェックはBEに残す。

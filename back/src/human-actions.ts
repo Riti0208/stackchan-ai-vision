@@ -1,20 +1,21 @@
 import type { Observation } from './perception';
 export const humanCueKeys = ['person_present', 'waving', 'smiling', 'frowning', 'eyes_wide', 'mouth_open', 'tears_visible', 'looking_at_robot'] as const;
 export type HumanCue = typeof humanCueKeys[number];
-export type HumanActionEvent = { id: string; stream_id: string; frame_id: number; observed_at: number; expires_at: number; changes: string[] };
+import type { HumanActionEvent, HumanActionChange } from './protocol.ts';
+export type { HumanActionEvent } from './protocol.ts';
 type Cue = { active: boolean; on: number; off: number; last_event_at: number };
 export type HumanActionState = { cues: Record<HumanCue, Cue>; order: number; at: number; pending: HumanActionEvent[] };
 export function initialHumanActions(saved?: HumanActionState): HumanActionState {
   return { cues: Object.fromEntries(humanCueKeys.map(k => [k, { active: saved?.cues[k]?.active || false, on: 0, off: 0, last_event_at: saved?.cues[k]?.last_event_at || 0 }])) as Record<HumanCue, Cue>, order: -1, at: 0, pending: [] };
 }
-const names: Record<HumanCue, string> = { person_present: 'person_appeared', waving: 'hand_raised', smiling: 'smile_started', frowning: 'frown_started', eyes_wide: 'eyes_widened', mouth_open: 'mouth_opened', tears_visible: 'tears_appeared', looking_at_robot: 'looked_at_robot' };
+const names: Record<HumanCue, HumanActionChange> = { person_present: 'person_appeared', waving: 'hand_raised', smiling: 'smile_started', frowning: 'frown_started', eyes_wide: 'eyes_widened', mouth_open: 'mouth_opened', tears_visible: 'tears_appeared', looking_at_robot: 'looked_at_robot' };
 export function scanHumanActions(previous: HumanActionState, observations: Observation, frame: { order: number; frame_id: number; stream_id: string; at: number }) {
   const state = structuredClone(previous);
   state.pending = state.pending.filter(e => e.expires_at > frame.at);
   if (frame.order <= state.order) return { state, created: null };
   const gap = state.at && frame.at - state.at > 6000;
   state.order = frame.order; state.at = frame.at;
-  const changes: string[] = [];
+  const changes: HumanActionChange[] = [];
   for (const key of humanCueKeys) {
     const cue = state.cues[key];
     if (gap) { cue.on = 0; cue.off = 0; }

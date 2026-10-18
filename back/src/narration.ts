@@ -1,6 +1,7 @@
 import type { Mind } from './social';
 export type Narration = { thought: string; public_text: string | null };
-export type Generation = { provider: 'openai' | 'mock' | 'fallback'; model: 'gpt-6-luna' | null; reason: 'api_error' | 'cooldown' | 'rate_limit' | null };
+import type { Generation } from './protocol.ts';
+export type { Generation } from './protocol.ts';
 export const isSpeechChoice = (choice: string) => choice.startsWith('greet:') || choice.startsWith('reply:');
 export function narrationPayload(context: object, choice: string) {
   return {

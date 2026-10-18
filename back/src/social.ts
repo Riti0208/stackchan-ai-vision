@@ -3,19 +3,8 @@ import type { Experience } from './perception';
 import type { Generation } from './narration';
 import { personalities, type Personality } from './personality.ts';
 export type { Personality } from './personality.ts';
-export type Intent = 'observe' | 'greet' | 'engage' | 'avert' | 'rest' | 'acknowledge_person' | 'delight';
-export type Target = { kind: 'person' | 'device' | 'none'; device_id: string | null };
-export type Motion = { seq: number; action: 'idle' | 'look_at' | 'nod' | 'shake' | 'happy'; pan: number; tilt: number; expression: 'neutral' | 'happy' | 'sad' | 'surprised' | 'thinking'; duration_ms: number };
-export type Mind = {
-  device_id: string; revision: number; personality: Personality; intent: Intent; target: Target;
-  thought: string; generation: Generation | null; relationships: Record<string, number>; cause: { kind: 'observation' | 'dialogue' | 'human_action'; message_id: string | null; event_id?: string }; valid_until: number;
-};
-export type Behavior = { device_id: string; mind_revision: number; display_text: string; command: Motion; issued_at: number };
-export type Dialogue = {
-  id: string; room: string; from_device_id: string; to_device_id: string;
-  from_stream_id: string; to_stream_id: string; reply_to: string | null;
-  speech_act: 'greet' | 'acknowledge'; text: string; created_at: number; expires_at: number;
-};
+import type { Intent, Target, Motion, Mind, Behavior, Dialogue } from './protocol.ts';
+export type { Intent, Target, Motion, Mind, Behavior, Dialogue } from './protocol.ts';
 export type PublicPeer = { device_id: string; stream_id: string; action: string; expression: string };
 export type Plan = { intent: Intent; target: Target; thought: string; display_text: string; action: Motion['action']; expression: Motion['expression']; pan?: number; tilt?: number; duration_ms: number };
 export const noTarget = (): Target => ({ kind: 'none', device_id: null });

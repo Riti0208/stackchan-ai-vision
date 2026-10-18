@@ -1,8 +1,8 @@
-# ｽﾀｯｸﾁｬﾝ AI Vision — 設計書 v1.6
+# ｽﾀｯｸﾁｬﾝ AI Vision — 設計書 v1.7
 
 更新: 2026-10-18。対象: DevDay Community Hackathon 2026（制作14:00〜17:30）。
 FW / BE / FEの3名で開発する。既存URLを維持し、Decisionsによる個体別の感情更新と、笑顔以外の表情観察を追加した。
-実装用の型・認証・接続順は[通信仕様 v1.6](communication_protocol_v1.md)を正とする。
+共有する通信型は[`back/src/protocol.ts`](../back/src/protocol.ts)に集約し、BE・FWシミュレーターで共有する。実装用の型・認証・接続順は[通信仕様 v1.7](communication_protocol_v1.md)を正とする。
 
 ## 1. 目指す体験
 
@@ -314,7 +314,7 @@ FW/制御ブラウザを認証し、OpenAI APIキーはサーバーのみで保�
 
 ## 9. 参考
 
-- [通信仕様 v1.6](communication_protocol_v1.md)
+- [通信仕様 v1.7](communication_protocol_v1.md)
 - [ローカルE2E / 公開手順](../back/README.md)
 - [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
 - [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)

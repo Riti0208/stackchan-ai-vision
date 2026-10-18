@@ -1,3 +1,4 @@
+import { serializeServer, parseClientMessage, finite, uint, type ServerData, type DeviceStatus, type TelemetrySummary, type TelemetrySnapshot } from './protocol.ts';
 import { paidSession, reservePaidCall, guardedFetch, type PaidEnv } from './paid-session';
 import { newHistory, newTransport, recordRun, receiveFrame, addSample, pacing, snapshot, type History, type Transport, type Pipeline, type Stage } from './telemetry';
 import { initialHumanActions, scanHumanActions, consumeHumanAction, type HumanActionState } from './human-actions';
@@ -11,12 +12,12 @@ interface Env extends PaidEnv {
   ALLOWED_ORIGIN?: string; ENABLE_LAB?: string; AI_MODE?: string; OPENAI_API_KEY?: string; STREAM_FPS?: string; EVAL_INTERVAL_MS?: string; NARRATION_INTERVAL_MS?: string;
 }
 type Config = Record<string, { control_token: string; devices: Record<string, string>; profiles?: Record<string, Personality> }>;
-type Action = 'idle' | 'look_at' | 'nod' | 'shake' | 'happy';
+type Action = ServerData['action']['action'];
 type Peer = { ws: WebSocket; role: 'device' | 'viewer' | 'controller'; id: string; sid?: string; expires?: number; seen: number; pending: Set<number>; sentAt: Map<number, number>; lastMetricsRequest?: number };
 type Device = {
   id: string; room: string; mind: Mind; behavior?: Behavior; inbox: Dialogue[]; experienced: Set<string>; greeted: Set<string>; publicHistory: Dialogue[];
   peer?: Peer; stream: string | null; viewers: Set<Peer>; controller?: Peer;
-  emotion: Emotion; status: Record<string, unknown>; seq: number; pan: number; tilt: number;
+  emotion: Emotion; status: DeviceStatus; seq: number; pan: number; tilt: number;
   order: number; frames: Map<number, { order: number; at: number }>; detectedOrder: number;
   retryAt: number; lastDecision: number; lastAI: number; busy: boolean; gestureUntil: number; lastDetection: number; lastGesture: number;
   lastTextAt: number; textRetryAt: number; textEmotion?: Emotion;
@@ -25,16 +26,12 @@ type Device = {
 };
 type Identity = { human?: HumanActionState; version: 1; firstJoinAt: number; updatedAt: number; totalExperiences: number; mind: Mind; emotion: Emotion; affectiveHistory: Experience[]; publicHistory: Dialogue[]; experienced: string[] };
 const ident = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-const actions: Action[] = ['idle', 'look_at', 'nod', 'shake', 'happy'];
-const offline = () => ({ online: false, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' });
-const finite = (x: unknown, lo = 0, hi = 1): x is number => typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi;
-const uint = (x: unknown): x is number => finite(x, 0, 0xffffffff) && Number.isInteger(x);
+const offline = (): DeviceStatus => ({ online: false, fps: 0, wifi_rssi: null, battery: null, current_action: 'idle' });
 const clamp = (x: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 const fail = (status: number, code: string, message = code) => json({ error: { code, message } }, status);
 const config = (env: Env): Config => Object.assign(Object.create(null), JSON.parse(env.ROOM_CONFIG || '{}'));
-const envelope = (type: string, data: unknown) => JSON.stringify({ type, timestamp: Date.now(), data });
-function send(p: Peer, type: string, data: unknown) { try { p.ws.send(envelope(type, data)); } catch { /* close cleans up */ } }
+function send<K extends keyof ServerData>(p: Peer, type: K, data: ServerData[K]) { try { p.ws.send(serializeServer(type, data)); } catch { /* close cleans up */ } }
 function close(p: Peer, code: number, reason: string) { try { p.ws.close(code, reason); } catch { /* already closed */ } }
 async function equal(a: string, b: string) {
   const [x, y] = await Promise.all([a, b].map(s => crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))));
@@ -131,6 +128,8 @@ export class Room {
       [this.identities, this.metricHistory] = await Promise.all([ctx.storage.list<Identity>({ prefix: 'identity:' }), ctx.storage.list<History>({ prefix: 'telemetry:' })]);
     });
   }
+  private telemetry(d: Device, details: true): TelemetrySnapshot;
+  private telemetry(d: Device, details?: false): TelemetrySummary;
   private telemetry(d: Device, details = false) { const full = snapshot(d.metrics, d.transport, pacing(this.env)); if (details) return full; const { samples, ...summary } = full; return summary; }
   private async finishRun(d: Device, run: Pipeline, started: number) {
     run.completed_at = Date.now(); run.duration_ms = Math.round(performance.now() - started);
@@ -140,7 +139,7 @@ export class Room {
     this.broadcast(d, 'telemetry', this.telemetry(d)); d.lastTelemetry = Date.now();
   }
   private memory(d: Device) {
-    return { scope: 'room_device', first_join_at: d.firstJoinAt, last_saved_at: this.identities.get(`identity:${d.id}`)?.updatedAt || null, experience_count: d.affectiveHistory.length, total_experiences: d.totalExperiences };
+    return { scope: 'room_device' as const, first_join_at: d.firstJoinAt, last_saved_at: this.identities.get(`identity:${d.id}`)?.updatedAt || null, experience_count: d.affectiveHistory.length, total_experiences: d.totalExperiences };
   }
   private async persist(d: Device) {
     if (d.firstJoinAt === null) return;
@@ -168,7 +167,7 @@ export class Room {
     }
     return d;
   }
-  private broadcast(d: Device, type: string, data: unknown) { for (const p of d.viewers) send(p, type, data); }
+  private broadcast<K extends keyof ServerData>(d: Device, type: K, data: ServerData[K]) { for (const p of d.viewers) send(p, type, data); }
   async fetch(req: Request): Promise<Response> {
     await this.ready;
     const url = new URL(req.url), room = url.searchParams.get('room')!;
@@ -246,7 +245,7 @@ export class Room {
       if ((d.latest && ((id - d.latest.id) >>> 0) >= 0x80000000) || d.latest?.id === id) return;
       const frame = { bytes: raw.slice(4), id, order: ++d.order, at: Date.now() };
       receiveFrame(d.transport, raw.byteLength, Date.now());
-      send(p, 'frame_received', { stream_id: d.stream, frame_id: id });
+      send(p, 'frame_received', { stream_id: d.stream!, frame_id: id });
       d.latest = frame; d.frames.set(id, { order: frame.order, at: frame.at });
       for (const [key, value] of d.frames) if (Date.now() - value.at > 3000 || d.frames.size > 16) d.frames.delete(key);
       for (const viewer of d.viewers) {
@@ -256,47 +255,32 @@ export class Room {
       return;
     }
     if (new TextEncoder().encode(raw).length > 16384) { close(p, 1009, 'message_too_large'); return; }
-    let m: any; try { m = JSON.parse(raw); } catch { return this.reject(p); }
-    if (!m || typeof m.type !== 'string' || !Number.isSafeInteger(m.timestamp) || !m.data || typeof m.data !== 'object' || Array.isArray(m.data)) return this.reject(p);
-    const a = m.data;
+    const parsed = parseClientMessage(raw, p.role);
+    if (!parsed.ok) { if (parsed.code === 'unknown_type') return; return this.reject(p, parsed.code, parsed.fatal); }
+    const m = parsed.message;
     if (m.type === 'telemetry_request') {
-      if (p.role === 'device') return this.reject(p, 'forbidden', true);
       if (Date.now() - (p.lastMetricsRequest || 0) < 1000) { send(p, 'error', { code: 'telemetry_rate_limited', message: 'Wait one second before requesting metrics again' }); return; }
       p.lastMetricsRequest = Date.now(); send(p, 'telemetry_snapshot', this.telemetry(d, true));
     } else if (m.type === 'frame_ack') {
-      if (p.role === 'device') return this.reject(p, 'forbidden', true);
-      if (typeof a.stream_id !== 'string' || !uint(a.frame_id)) return this.reject(p);
+      const a = m.data;
       if (a.stream_id === d.stream && p.pending.has(a.frame_id)) {
         const sent = p.sentAt.get(a.frame_id); if (sent !== undefined) addSample(d.transport.viewer_rtt, performance.now() - sent);
         for (const id of p.pending) { p.pending.delete(id); p.sentAt.delete(id); if (id === a.frame_id) break; }
       }
     } else if (m.type === 'action_ack') {
-      if (p.role !== 'device') return this.reject(p, 'forbidden', true);
-      if (!uint(a.seq) || typeof a.accepted !== 'boolean') return this.reject(p);
+      const a = m.data;
       const sent = d.actionSentAt.get(a.seq);
       if (sent) { addSample(d.transport.action_rtt, performance.now() - sent.sent); if (a.accepted && sent.frame_at !== undefined) addSample(d.transport.frame_to_action_ack, Date.now() - sent.frame_at); if (!a.accepted) d.transport.rejected_actions++; d.actionSentAt.delete(a.seq); }
     } else if (m.type === 'device_status') {
-      if (p.role !== 'device') return this.reject(p, 'forbidden', true);
-      if (typeof a.online !== 'boolean' || !finite(a.fps, 0, 1000) || !(a.wifi_rssi === null || finite(a.wifi_rssi, -200, 100)) || !(a.battery === null || finite(a.battery, 0, 100)) || !actions.includes(a.current_action)) return this.reject(p, 'invalid_status');
-      if (a.transport !== undefined) {
-        if (!a.transport || typeof a.transport !== 'object' || !(a.transport.upload_rtt_ms === null || finite(a.transport.upload_rtt_ms, 0, 60000))) return this.reject(p, 'invalid_status');
-        if (a.transport.upload_rtt_ms !== null) addSample(d.transport.upload_rtt, a.transport.upload_rtt_ms);
-      }
+      const a = m.data;
+      if (a.transport?.upload_rtt_ms != null) addSample(d.transport.upload_rtt, a.transport.upload_rtt_ms);
       p.seen = Date.now(); d.status = { online: true, fps: a.fps, wifi_rssi: a.wifi_rssi, battery: a.battery, current_action: a.current_action };
       this.broadcast(d, 'device_status', d.status);
     } else if (m.type === 'heartbeat') {
-      if (p.role !== 'controller') return this.reject(p, 'forbidden', true);
       p.seen = Date.now(); send(p, 'heartbeat', {});
     } else if (m.type === 'detection') {
-      if (p.role !== 'controller') return this.reject(p, 'forbidden', true);
-      if (typeof a.stream_id !== 'string' || !uint(a.frame_id) || !Array.isArray(a.faces) || a.faces.length > 10) return this.reject(p);
-      const ids = new Set<number>();
-      for (const f of a.faces) {
-        if (!f || !Number.isSafeInteger(f.id) || f.id < 0 || ids.has(f.id) || !finite(f.x) || !finite(f.y) || !finite(f.width) || !finite(f.height) || f.width <= 0 || f.height <= 0 || f.x + f.width > 1.0000001 || f.y + f.height > 1.0000001 || !finite(f.confidence)) return this.reject(p);
-        ids.add(f.id);
-      }
-      const primary = [...a.faces].sort((x: any, y: any) => y.width * y.height - x.width * x.height || x.id - y.id)[0];
-      if (a.primary_face_id !== (primary?.id ?? null)) return this.reject(p);
+      const a = m.data;
+      const primary = [...a.faces].sort((x, y) => y.width * y.height - x.width * x.height || x.id - y.id)[0];
       const frame = d.frames.get(a.frame_id);
       if (a.stream_id !== d.stream || !frame || Date.now() - frame.at > 3000 || frame.order <= d.detectedOrder) return;
       d.detectedOrder = frame.order; d.lastDetection = Date.now();
@@ -305,7 +289,7 @@ export class Room {
       d.pan = clamp(d.pan + (primary.x + primary.width / 2 - .5) * .3, -1, 1);
       d.tilt = clamp(d.tilt - (primary.y + primary.height / 2 - .5) * .3, -1, 1);
       this.action(d, 'look_at', 'thinking', 500, '興味を示しながら、相手へ視線を向ける');
-    } else if (['action', 'emotion', 'decision', 'session', 'stream', 'error', 'mind', 'behavior', 'dialogue', 'dialogue_history', 'memory', 'human_action', 'telemetry', 'telemetry_snapshot', 'frame_received'].includes(m.type)) this.reject(p, 'forbidden', true);
+    }
   }
   private action(d: Device, action: Action, expression: Motion['expression'], duration_ms: number, display_text = '穏やかな表情で待つ', run?: Pipeline) {
     if (!d.peer) return;
@@ -343,7 +327,7 @@ export class Room {
     }
   }
   private async decide(d: Device, run: Pipeline) {
-    const frame = d.latest!, stream = d.stream, before = { ...d.emotion };
+    const frame = d.latest!, stream = d.stream!, before = { ...d.emotion };
     const calls: CallMetrics[] = [];
     const started = Date.now();
     d.inbox = d.inbox.filter(m => m.expires_at > started && m.to_stream_id === stream && this.devices.get(m.from_device_id)?.stream === m.from_stream_id);
