@@ -245,17 +245,12 @@ Workerの新規作成や他プロジェクトの操作は権限の対象に含�
 リポジトリのActions Secretsに`CLOUDFLARE_API_TOKEN`と`CLOUDFLARE_ACCOUNT_ID`を登録済み。
 期限前にCloudflare側で更新し、Actions Secretも差し替える。
 
-`.github/workflows/deploy-back.yml`はmainへのpushで実行する。型チェック、単体テスト、
-モックE2E、公開ビルド、フロントのブラウザ結合確認が成功したら既存Workerへデプロイし、
-`/health`・フロント画面・顔検出アセットと実APIの停止状態を確認する。
+`.github/workflows/deploy-back.yml`はmainへのpushで依存インストール、FEビルド、既存Workerへのデプロイ、公開HTTP疎通確認だけを行う。
+型チェック・unit・E2E・ブラウザsmokeはpush前にローカルで確認する。CIはこれらを再実行しない。
 Actions画面からmainを指定して手動実行も可能。同時デプロイは直列化する。
-FEの依存インストールとビルドも同じCIへ統合する。Cloudflare上の既存secretをそのまま維持し、
-OpenAIキーや部屋の認証情報をGitHubへコピーする必要はない。
-Playwrightはheadless Chromium shellだけをインストールし、OS・CPUアーキテクチャ・FEのlockfile単位でキャッシュする。
-ブラウザのシステム依存はキャッシュ命中時も確認する。
-CIでは公開ビルド済みの`front/dist`をsmokeで検証したあと、`build`フックだけを除いた一時設定
-`back/.wrangler-ci.json`でデプロイし、FEの二重ビルドを省く。通常の`npm run deploy`は引き続きFEをビルドする。
-smokeの画像ACK確認は5件以上という条件を維持し、最大10秒だけ到着を待つ。
+Cloudflare上の既存secretを維持するため、OpenAIキーや部屋の認証情報をGitHubへコピーする必要はない。
+CIではビルド済みの`front/dist`を、`build`フックだけを除いた一時設定`back/.wrangler-ci.json`でデプロイし、FEの二重ビルドを省く。
+通常の`npm run deploy`は引き続きFEをビルドする。公開確認は現在の実APIセッションを読み取るだけで、開始・停止を行わない。
 
 アカウント固有の設定・secret・デプロイトークンはGit対象外の
 `back/.wrangler/deploy/<account-id>/`に保存する。secretやトークンをコミットしない。

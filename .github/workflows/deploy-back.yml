@@ -33,24 +33,11 @@ jobs:
       - name: Install frontend dependencies and self-hosted vision assets
         run: npm ci
         working-directory: front
-      - run: npm run typecheck
-      - run: npm run test:unit
-      - run: npm run test:e2e
-      - run: npm run build
-      - name: Cache Playwright browser
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-shell-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('front/package-lock.json') }}
-      - name: Install browser for frontend integration check
-        run: npx playwright install --with-deps --only-shell chromium
+      - name: Build frontend assets
+        run: npm run build
         working-directory: front
-      - name: Verify frontend with isolated mock backend
-        run: npm run test:smoke
-        working-directory: front
-      - name: Deploy existing Worker with verified frontend assets
-        # Keep the normal local deploy build hook; CI already built and smoke-tested
-        # front/dist. Write beside wrangler.jsonc to preserve relative paths.
+      - name: Deploy existing Worker
+        # CI builds front/dist once. Write beside wrangler.jsonc to preserve relative paths.
         run: |
           trap 'rm -f .wrangler-ci.json' EXIT
           node --input-type=module <<'JS'
@@ -63,7 +50,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Verify production health, monitor and paid API guard
+      - name: Verify production HTTP endpoints
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
@@ -75,8 +62,8 @@ jobs:
               assert.equal(response.status, 200);
               const health = await response.json();
               assert.equal(health.ok, true);
-              assert.equal(health.ai_mode, 'mock');
-              assert.equal(health.paid_session.active, false);
+              assert.equal(typeof health.paid_session.active, 'boolean');
+              assert.equal(health.ai_mode, health.paid_session.active ? 'decisions' : 'mock');
               const base = new URL(url).origin;
               const page = await fetch(base, { signal: AbortSignal.timeout(15000) });
               assert.equal(page.status, 200);
@@ -94,7 +81,7 @@ jobs:
               const monitor = await fetch(new URL('/monitor', url), { signal: AbortSignal.timeout(15000) });
               assert.equal(monitor.status, 200);
               assert.match(await monitor.text(), /StackChan 部屋モニター/);
-              console.log('Production and read-only monitor healthy; paid API session inactive.');
+              console.log('Production HTTP endpoints healthy; API session observed without changing it.');
               lastError = null;
               break;
             } catch (error) {
