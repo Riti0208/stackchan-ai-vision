@@ -6,11 +6,11 @@ import {build} from 'esbuild';
 import {Miniflare,convertV4MiniflareOptions,Log,LogLevel} from 'miniflare';
 import sharp from 'sharp';
 const origin='https://conversion-test.invalid',root=fileURLToPath(new URL('../',import.meta.url));
-// Replace only the existing scheduler yield after encoding with controlled I/O.
+// Replace only the existing diagnostic yield after publication with controlled I/O.
 // Production has no test setting and sends no additional upstream requests.
-const bundle=await build({absWorkingDir:root,entryPoints:['src/index.ts'],bundle:true,write:false,format:'esm',platform:'browser',plugins:[{name:'controlled-encode-yield',setup(b){b.onLoad({filter:/\/src\/index\.ts$/},async args=>{
+const bundle=await build({absWorkingDir:root,entryPoints:['src/index.ts'],bundle:true,write:false,format:'esm',platform:'browser',plugins:[{name:'controlled-diagnostic-yield',setup(b){b.onLoad({filter:/\/src\/index\.ts$/},async args=>{
  const source=await readFile(args.path,'utf8'),needle='await new Promise<void>(resolve => setTimeout(resolve, 0));';
- assert.equal(source.split(needle).length,2,'exactly one post-encode yield');
+ assert.equal(source.split(needle).length,2,'exactly one diagnostic yield');
  return {contents:source.replace(needle,"await fetch('https://conversion-barrier.invalid/yield');"),loader:'ts'};
 });}}]});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -32,42 +32,38 @@ async function harness(){
  return {connect,gates,release:i=>gates[i](),gate:n=>until(()=>gates.length>=n),async close(){closing=true;for(const release of gates)release();for(const ws of sockets)try{ws.close(1000);}catch{}await mf.dispose();}};
 }
 async function stats(view){view.send('telemetry_request',{});return (await view.wait(m=>m.type==='telemetry_snapshot')).data.transport;}
-test('completed JPEG publishes despite newer ingress, then the next JPEG publishes in order',{timeout:10000},async()=>{
+test('JPEGs publish before the timing yield completes, including newer ingress',{timeout:10000},async()=>{
  const h=await harness();try{
-  const d=await h.connect(true),v=await h.connect();d.frame(10);await h.gate(1);
-  d.frame(11);await d.wait(m=>m.type==='frame_received'&&m.data.frame_id===11);
-  h.release(0);await h.gate(2);await until(()=>v.frames.includes(10),800);
-  assert.deepEqual(v.frames,[10],'first JPEG must publish before releasing the next encode');
-  h.release(1);await until(()=>v.frames.length===2);assert.deepEqual(v.frames,[10,11]);
+  const d=await h.connect(true),v=await h.connect();d.frame(10);await h.gate(1);await until(()=>v.frames.includes(10));
+  d.frame(11);await h.gate(2);await until(()=>v.frames.length===2);assert.deepEqual(v.frames,[10,11]);
   for(const packet of v.packets){const image=await sharp(packet.subarray(4)).metadata();assert.equal(image.width,160);assert.equal(image.height,120);}
   const t=await stats(v);assert.equal(t.frames_received,2);assert.equal(t.conversion.converted_total,2);assert.equal(t.conversion.published_total,2);assert.equal(t.conversion.dropped_total,0);
  }finally{await h.close();}
 });
-test('a burst replaces only pending raw; completed JPEG still publishes and newest pending follows',{timeout:10000},async()=>{
+test('a 50-frame burst publishes every accepted raw frame in order with no pending replacement',{timeout:10000},async()=>{
  const h=await harness();try{
-  const d=await h.connect(true),v=await h.connect();d.frame(1);await h.gate(1);
-  for(let id=2;id<=50;id++)d.frame(id);await d.wait(m=>m.type==='frame_received'&&m.data.frame_id===50);
-  h.release(0);await h.gate(2);await until(()=>v.frames.includes(1));h.release(1);await until(()=>v.frames.length===2);
-  assert.deepEqual(v.frames,[1,50]);const t=await stats(v);assert.equal(t.frames_received,50);assert.equal(t.conversion.converted_total,2);assert.equal(t.conversion.published_total,2);assert.equal(t.conversion.dropped_total,48);
+  const d=await h.connect(true),v=await h.connect();
+  for(let id=1;id<=50;id++)d.frame(id);await d.wait(m=>m.type==='frame_received'&&m.data.frame_id===50);await until(()=>v.frames.length===50);
+  assert.deepEqual(v.frames,Array.from({length:50},(_,i)=>i+1));const t=await stats(v);assert.equal(t.frames_received,50);assert.equal(t.conversion.converted_total,50);assert.equal(t.conversion.published_total,50);assert.equal(t.conversion.dropped_total,0);
  }finally{await h.close();}
 });
-test('in-flight JPEG from replaced device never leaks into the new stream',{timeout:10000},async()=>{
+test('replacement cannot publish old frames after the new stream; old timing cannot pollute new counters',{timeout:10000},async()=>{
  const h=await harness();try{
-  const old=await h.connect(true),v=await h.connect();old.frame(10);await h.gate(1);
-  const replacement=await h.connect(true);replacement.frame(20);await replacement.wait(m=>m.type==='frame_received'&&m.data.frame_id===20);
-  h.release(0);await h.gate(2);assert.deepEqual(v.frames,[]);h.release(1);await until(()=>v.frames.length===1);assert.deepEqual(v.frames,[20]);
+  const old=await h.connect(true),v=await h.connect();old.frame(10);await h.gate(1);await until(()=>v.frames.length===1);
+  const replacement=await h.connect(true);replacement.frame(0);await h.gate(2);await until(()=>v.frames.length===2);
+  h.release(0);await sleep(100);assert.deepEqual(v.frames,[10,0]);const t=await stats(v);assert.equal(t.frames_received,1);assert.equal(t.conversion.published_total,1);assert.equal(t.conversion.count,0);
  }finally{await h.close();}
 });
-test('expired completed JPEG remains discarded',{timeout:10000},async()=>{
+test('slow diagnostic timing cannot expire or postpone an already published image',{timeout:10000},async()=>{
  const h=await harness();try{
-  const d=await h.connect(true),v=await h.connect();d.frame(1);await h.gate(1);await sleep(3100);h.release(0);await sleep(150);
-  assert.deepEqual(v.frames,[]);const t=await stats(v);assert.equal(t.conversion.converted_total,1);assert.equal(t.conversion.published_total,0);assert.equal(t.conversion.dropped_total,1);
+  const d=await h.connect(true),v=await h.connect();d.frame(1);await h.gate(1);await until(()=>v.frames.length===1);await sleep(3100);h.release(0);await sleep(100);
+  assert.deepEqual(v.frames,[1]);const t=await stats(v);assert.equal(t.conversion.published_total,1);assert.equal(t.conversion.dropped_total,0);
  }finally{await h.close();}
 });
 test('FE publishing has no STREAM_FPS cap and frame-ID wrap retains ingress order',{timeout:10000},async()=>{
  const h=await harness();try{
   const d=await h.connect(true),v=await h.connect(),ids=[0xfffffffe,0xffffffff,0,1,2];
-  for(let i=0;i<ids.length;i++){d.frame(ids[i]);await h.gate(i+1);h.release(i);await until(()=>v.frames.length===i+1);}
+  for(const id of ids)d.frame(id);await until(()=>v.frames.length===ids.length);
   assert.deepEqual(v.frames,ids);const t=await stats(v);assert.equal(t.conversion.published_total,ids.length);assert.equal(t.conversion.dropped_total,0);
  }finally{await h.close();}
 });

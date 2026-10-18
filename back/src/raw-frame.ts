@@ -32,15 +32,3 @@ export function encodeRawFrame(frame: RawFrame, byteOrder: RGB565ByteOrder = 'li
   const packet = new Uint8Array(4 + jpeg.length); new DataView(packet.buffer).setUint32(0, frame.id); packet.set(jpeg, 4);
   return packet;
 }
-/** One pending value per authorized device. Replacing a value retains send-order fairness. */
-export class LatestFrames<T> {
-  private pending = new Map<string, T>();
-  put(key: string, frame: T): boolean { const replaced = this.pending.has(key); this.pending.set(key, frame); return replaced; }
-  cancel(key: string): boolean { return this.pending.delete(key); }
-  take(): T | undefined {
-    const first = this.pending.entries().next().value;
-    if (!first) return undefined;
-    this.pending.delete(first[0]); return first[1];
-  }
-  get size() { return this.pending.size; }
-}
